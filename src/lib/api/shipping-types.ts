@@ -129,8 +129,10 @@ export interface ShipmentRead {
   consignee: ConsigneeInfo;
   shipper: ShipperInfo;
   status: string;
+  status_message?: string | null;
   airwaybill_number: string | null;
   tracking_number: string | null;
+  label_base64: string | null;
   created_at: string;
   updated_at: string;
   items: ShipmentItemRead[];

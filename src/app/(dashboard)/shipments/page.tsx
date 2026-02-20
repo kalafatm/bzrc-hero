@@ -81,6 +81,7 @@ const STATUS_COLORS: Record<string, string> = {
   draft: "bg-gray-100 text-gray-700",
   pending: "bg-yellow-100 text-yellow-700",
   submitted: "bg-blue-100 text-blue-700",
+  submit_failed: "bg-red-100 text-red-700",
   in_transit: "bg-orange-100 text-orange-700",
   delivered: "bg-green-100 text-green-700",
   failed: "bg-red-100 text-red-700",
@@ -214,24 +215,25 @@ export default function ShipmentsPage() {
   };
 
   const handleDownloadLabel = async (shipment: ShipmentData) => {
-    // Labels come from the carrier_response_payload after submission
-    // For now, fetch the shipment detail and check for label data
     try {
-      const res = await fetch(`/api/shipments/${shipment.id}`);
-      const json = await res.json();
-      if (json.error) {
-        toast.error(json.error);
+      const res = await fetch(`/api/shipments/${shipment.id}/label`);
+      if (!res.ok) {
+        const json = await res.json().catch(() => null);
+        toast.error(json?.error || `Failed to download label (HTTP ${res.status})`);
         return;
       }
-      // The remote API may include label data in the response or carrier_response_payload
-      // For now, open the shipment detail
-      toast.info(
-        shipment.airwaybill_number
-          ? `AWB: ${shipment.airwaybill_number} — Label download available after carrier integration`
-          : "No AWB yet — submit the shipment first"
-      );
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `label_${shipment.airwaybill_number || shipment.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("Label downloaded");
     } catch {
-      toast.error("Failed to fetch label");
+      toast.error("Failed to download label");
     }
   };
 
@@ -244,7 +246,7 @@ export default function ShipmentsPage() {
     });
 
   const isSubmittable = (s: ShipmentData) =>
-    s.status === "created" || s.status === "draft" || s.status === "pending";
+    s.status === "created" || s.status === "draft" || s.status === "pending" || s.status === "submit_failed";
 
   return (
     <div className="space-y-4">
@@ -294,6 +296,7 @@ export default function ShipmentsPage() {
             <SelectItem value="created">Created</SelectItem>
             <SelectItem value="pending">Pending</SelectItem>
             <SelectItem value="submitted">Submitted</SelectItem>
+            <SelectItem value="submit_failed">Submit Failed</SelectItem>
             <SelectItem value="in_transit">In Transit</SelectItem>
             <SelectItem value="delivered">Delivered</SelectItem>
             <SelectItem value="failed">Failed</SelectItem>
