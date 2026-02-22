@@ -18,6 +18,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
@@ -47,6 +48,7 @@ interface ShipmentData {
   customs_value_currency: string | null;
   shipment_weight_value: number;
   status: string;
+  status_message: string | null;
   airwaybill_number: string | null;
   tracking_number: string | null;
   created_at: string;
@@ -55,16 +57,35 @@ interface ShipmentData {
   include_label: boolean;
   consignee: {
     person_name: string;
+    company_name?: string | null;
     country_code: string;
     city: string;
+    district?: string | null;
     line1: string;
+    line2?: string | null;
+    line3?: string | null;
+    post_code?: string | null;
     phone1?: string | null;
+    phone2?: string | null;
+    cell_phone?: string | null;
     email?: string | null;
+    type?: string | null;
+    civil_id?: string | null;
+    location_code1?: string | null;
+    location_code2?: string | null;
+    location_code3?: string | null;
+    short_address?: string | null;
   };
   shipper: {
     person_name: string;
+    company_name?: string | null;
     country_code: string;
     city: string;
+    line1: string;
+    line2?: string | null;
+    post_code?: string | null;
+    phone1?: string | null;
+    email?: string | null;
   };
   items: {
     id: number;
@@ -482,7 +503,7 @@ export default function ShipmentsPage() {
 
       {/* Detail Dialog */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Shipment #{detail?.id}</DialogTitle>
             <DialogDescription>
@@ -493,155 +514,378 @@ export default function ShipmentsPage() {
           </DialogHeader>
 
           {detail && (
-            <div className="space-y-4 py-4">
-              {/* Consignee */}
-              <div className="space-y-2">
-                <p className="text-sm font-semibold">Consignee</p>
-                <div className="text-sm space-y-1">
-                  <div className="font-medium">
-                    {detail.consignee.person_name}
-                  </div>
-                  {detail.consignee.phone1 && (
-                    <div>{detail.consignee.phone1}</div>
-                  )}
-                  {detail.consignee.email && (
-                    <div className="text-muted-foreground">
-                      {detail.consignee.email}
-                    </div>
-                  )}
-                  <div>{detail.consignee.line1}</div>
-                  <div>
-                    {detail.consignee.city},{" "}
-                    {detail.consignee.country_code}
-                  </div>
-                </div>
-              </div>
+            <Tabs defaultValue="summary" className="w-full">
+              <TabsList className="grid w-full grid-cols-3">
+                <TabsTrigger value="summary">Summary</TabsTrigger>
+                <TabsTrigger value="waybill">Waybill</TabsTrigger>
+                <TabsTrigger value="items">Items</TabsTrigger>
+              </TabsList>
 
-              <Separator />
-
-              {/* Shipper */}
-              <div className="space-y-2">
-                <p className="text-sm font-semibold">Shipper</p>
-                <div className="text-sm">
-                  {detail.shipper.person_name} — {detail.shipper.city},{" "}
-                  {detail.shipper.country_code}
-                </div>
-              </div>
-
-              <Separator />
-
-              {/* Items */}
-              <div className="space-y-2">
-                <p className="text-sm font-semibold">
-                  Items ({detail.items.length})
-                </p>
-                {detail.items.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-start justify-between rounded-md border p-3 text-sm"
-                  >
-                    <div className="flex-1">
-                      <div className="font-medium">
-                        {item.goods_description}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        Qty: {item.quantity} | {item.weight_value} kg
-                      </div>
-                    </div>
+              {/* ── Summary Tab ─────────────────────────── */}
+              <TabsContent value="summary" className="space-y-4 mt-4">
+                {/* Consignee */}
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold">Consignee</p>
+                  <div className="text-sm space-y-1">
                     <div className="font-medium">
-                      {item.customs_value.toFixed(2)} {item.customs_currency}
+                      {detail.consignee.person_name}
+                    </div>
+                    {detail.consignee.phone1 && (
+                      <div>{detail.consignee.phone1}</div>
+                    )}
+                    {detail.consignee.email && (
+                      <div className="text-muted-foreground">
+                        {detail.consignee.email}
+                      </div>
+                    )}
+                    <div>{detail.consignee.line1}</div>
+                    <div>
+                      {detail.consignee.city},{" "}
+                      {detail.consignee.country_code}
                     </div>
                   </div>
-                ))}
-              </div>
-
-              <Separator />
-
-              {/* Summary */}
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                <div className="text-muted-foreground">Product Type</div>
-                <div>{detail.product_type}</div>
-                <div className="text-muted-foreground">Weight</div>
-                <div>{detail.shipment_weight_value} kg</div>
-                <div className="text-muted-foreground">Pieces</div>
-                <div>{detail.number_of_pieces}</div>
-                {detail.cod_amount != null && detail.cod_amount > 0 && (
-                  <>
-                    <div className="text-muted-foreground">COD</div>
-                    <div className="font-medium text-orange-600">
-                      {detail.cod_amount} {detail.cod_currency}
-                    </div>
-                  </>
-                )}
-                {detail.customs_declared_value != null && (
-                  <>
-                    <div className="text-muted-foreground">
-                      Customs Value
-                    </div>
-                    <div>
-                      {detail.customs_declared_value}{" "}
-                      {detail.customs_value_currency}
-                    </div>
-                  </>
-                )}
-                <div className="text-muted-foreground">Credential</div>
-                <div>
-                  {detail.customer_code} / {detail.branch_code}
                 </div>
-              </div>
 
-              {/* AWB + Label section */}
-              {detail.airwaybill_number && (
-                <>
-                  <Separator />
-                  <div className="space-y-2">
-                    <p className="text-sm font-semibold">
-                      Airwaybill & Label
-                    </p>
-                    <div className="flex items-center justify-between rounded-md border p-3">
+                <Separator />
+
+                {/* Shipper */}
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold">Shipper</p>
+                  <div className="text-sm">
+                    {detail.shipper.person_name} — {detail.shipper.city},{" "}
+                    {detail.shipper.country_code}
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Summary Grid */}
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div className="text-muted-foreground">Product Type</div>
+                  <div>{detail.product_type}</div>
+                  <div className="text-muted-foreground">Weight</div>
+                  <div>{detail.shipment_weight_value} kg</div>
+                  <div className="text-muted-foreground">Pieces</div>
+                  <div>{detail.number_of_pieces}</div>
+                  {detail.cod_amount != null && detail.cod_amount > 0 && (
+                    <>
+                      <div className="text-muted-foreground">COD</div>
+                      <div className="font-medium text-orange-600">
+                        {detail.cod_amount} {detail.cod_currency}
+                      </div>
+                    </>
+                  )}
+                  {detail.customs_declared_value != null && (
+                    <>
+                      <div className="text-muted-foreground">Customs Value</div>
                       <div>
-                        <div className="font-mono font-medium">
-                          {detail.airwaybill_number}
-                        </div>
-                        {detail.tracking_number && (
-                          <div className="text-xs text-muted-foreground">
-                            Tracking: {detail.tracking_number}
+                        {detail.customs_declared_value}{" "}
+                        {detail.customs_value_currency}
+                      </div>
+                    </>
+                  )}
+                  <div className="text-muted-foreground">Credential</div>
+                  <div>
+                    {detail.customer_code} / {detail.branch_code}
+                  </div>
+                </div>
+
+                {/* AWB + Label section */}
+                {detail.airwaybill_number && (
+                  <>
+                    <Separator />
+                    <div className="space-y-2">
+                      <p className="text-sm font-semibold">
+                        Airwaybill & Label
+                      </p>
+                      <div className="flex items-center justify-between rounded-md border p-3">
+                        <div>
+                          <div className="font-mono font-medium">
+                            {detail.airwaybill_number}
                           </div>
+                          {detail.tracking_number && (
+                            <div className="text-xs text-muted-foreground">
+                              Tracking: {detail.tracking_number}
+                            </div>
+                          )}
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleDownloadLabel(detail)}
+                        >
+                          <FileText className="size-4" />
+                          Label
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* Submit button */}
+                {isSubmittable(detail) && (
+                  <>
+                    <Separator />
+                    <Button
+                      className="w-full"
+                      onClick={() => {
+                        handleSubmitSingle(detail.id);
+                        setDetailOpen(false);
+                      }}
+                      disabled={submitting.has(detail.id)}
+                    >
+                      <Send className="size-4" />
+                      {submitting.has(detail.id)
+                        ? "Submitting..."
+                        : "Submit to Naqel"}
+                    </Button>
+                  </>
+                )}
+              </TabsContent>
+
+              {/* ── Waybill Tab (carrier-bound values) ──── */}
+              <TabsContent value="waybill" className="space-y-4 mt-4">
+                <p className="text-xs text-muted-foreground">
+                  All field values that will be / were sent to the carrier API
+                </p>
+
+                {/* Shipment Header */}
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold">Shipment</p>
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <div className="grid grid-cols-[160px_1fr] gap-y-1.5 text-xs font-mono">
+                      <span className="text-muted-foreground">customer_code</span>
+                      <span>{detail.customer_code}</span>
+                      <span className="text-muted-foreground">branch_code</span>
+                      <span>{detail.branch_code}</span>
+                      <span className="text-muted-foreground">product_type</span>
+                      <span>{detail.product_type}</span>
+                      <span className="text-muted-foreground">description_of_goods</span>
+                      <span className="break-all">{detail.description_of_goods}</span>
+                      <span className="text-muted-foreground">number_of_pieces</span>
+                      <span>{detail.number_of_pieces}</span>
+                      <span className="text-muted-foreground">shipping_datetime</span>
+                      <span>{detail.shipping_datetime}</span>
+                      <span className="text-muted-foreground">shipment_weight_value</span>
+                      <span>{detail.shipment_weight_value}</span>
+                      <span className="text-muted-foreground">shipment_weight_unit</span>
+                      <span>1 (KG)</span>
+                      <span className="text-muted-foreground">shipper_reference1</span>
+                      <span>{detail.shipper_reference1 || "—"}</span>
+                      <span className="text-muted-foreground">include_label</span>
+                      <span>{detail.include_label ? "true" : "false"}</span>
+                      {detail.cod_amount != null && detail.cod_amount > 0 && (
+                        <>
+                          <span className="text-muted-foreground">cod_amount</span>
+                          <span className="text-orange-600 font-medium">{detail.cod_amount}</span>
+                          <span className="text-muted-foreground">cod_currency</span>
+                          <span className="text-orange-600">{detail.cod_currency}</span>
+                        </>
+                      )}
+                      {detail.customs_declared_value != null && (
+                        <>
+                          <span className="text-muted-foreground">customs_declared_value</span>
+                          <span>{detail.customs_declared_value}</span>
+                          <span className="text-muted-foreground">customs_value_currency</span>
+                          <span>{detail.customs_value_currency}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Consignee Detail */}
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold">Consignee</p>
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <div className="grid grid-cols-[160px_1fr] gap-y-1.5 text-xs font-mono">
+                      <span className="text-muted-foreground">person_name</span>
+                      <span>{detail.consignee.person_name}</span>
+                      {detail.consignee.company_name && (
+                        <>
+                          <span className="text-muted-foreground">company_name</span>
+                          <span>{detail.consignee.company_name}</span>
+                        </>
+                      )}
+                      <span className="text-muted-foreground">country_code</span>
+                      <span>{detail.consignee.country_code}</span>
+                      <span className="text-muted-foreground">city</span>
+                      <span>{detail.consignee.city}</span>
+                      <span className="text-muted-foreground">line1</span>
+                      <span className="break-all">{detail.consignee.line1}</span>
+                      {detail.consignee.line2 && (
+                        <>
+                          <span className="text-muted-foreground">line2</span>
+                          <span className="break-all">{detail.consignee.line2}</span>
+                        </>
+                      )}
+                      {detail.consignee.post_code && (
+                        <>
+                          <span className="text-muted-foreground">post_code</span>
+                          <span>{detail.consignee.post_code}</span>
+                        </>
+                      )}
+                      {detail.consignee.district && (
+                        <>
+                          <span className="text-muted-foreground">district</span>
+                          <span>{detail.consignee.district}</span>
+                        </>
+                      )}
+                      <span className="text-muted-foreground">phone1</span>
+                      <span>{detail.consignee.phone1 || "—"}</span>
+                      {detail.consignee.cell_phone && (
+                        <>
+                          <span className="text-muted-foreground">cell_phone</span>
+                          <span>{detail.consignee.cell_phone}</span>
+                        </>
+                      )}
+                      <span className="text-muted-foreground">email</span>
+                      <span>{detail.consignee.email || "—"}</span>
+                      {detail.consignee.location_code1 && (
+                        <>
+                          <span className="text-muted-foreground">location_code1</span>
+                          <span>{detail.consignee.location_code1}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Shipper Detail */}
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold">Shipper</p>
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <div className="grid grid-cols-[160px_1fr] gap-y-1.5 text-xs font-mono">
+                      <span className="text-muted-foreground">person_name</span>
+                      <span>{detail.shipper.person_name}</span>
+                      {detail.shipper.company_name && (
+                        <>
+                          <span className="text-muted-foreground">company_name</span>
+                          <span>{detail.shipper.company_name}</span>
+                        </>
+                      )}
+                      <span className="text-muted-foreground">country_code</span>
+                      <span>{detail.shipper.country_code}</span>
+                      <span className="text-muted-foreground">city</span>
+                      <span>{detail.shipper.city}</span>
+                      <span className="text-muted-foreground">line1</span>
+                      <span className="break-all">{detail.shipper.line1}</span>
+                      {detail.shipper.line2 && (
+                        <>
+                          <span className="text-muted-foreground">line2</span>
+                          <span>{detail.shipper.line2}</span>
+                        </>
+                      )}
+                      {detail.shipper.post_code && (
+                        <>
+                          <span className="text-muted-foreground">post_code</span>
+                          <span>{detail.shipper.post_code}</span>
+                        </>
+                      )}
+                      <span className="text-muted-foreground">phone1</span>
+                      <span>{detail.shipper.phone1 || "—"}</span>
+                      <span className="text-muted-foreground">email</span>
+                      <span>{detail.shipper.email || "—"}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Items Detail */}
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold">Items ({detail.items.length})</p>
+                  {detail.items.map((item, idx) => (
+                    <div key={item.id} className="rounded-md border bg-muted/30 p-3">
+                      <p className="text-xs font-semibold mb-2">Item {idx + 1}</p>
+                      <div className="grid grid-cols-[160px_1fr] gap-y-1.5 text-xs font-mono">
+                        <span className="text-muted-foreground">goods_description</span>
+                        <span className="break-all">{item.goods_description}</span>
+                        <span className="text-muted-foreground">quantity</span>
+                        <span>{item.quantity}</span>
+                        <span className="text-muted-foreground">weight_value</span>
+                        <span>{item.weight_value}</span>
+                        <span className="text-muted-foreground">customs_value</span>
+                        <span>{item.customs_value}</span>
+                        <span className="text-muted-foreground">customs_currency</span>
+                        <span>{item.customs_currency}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* AWB result */}
+                {detail.airwaybill_number && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold">Carrier Response</p>
+                    <div className="rounded-md border bg-green-50 p-3">
+                      <div className="grid grid-cols-[160px_1fr] gap-y-1.5 text-xs font-mono">
+                        <span className="text-muted-foreground">status</span>
+                        <span className="font-medium text-green-700">{detail.status}</span>
+                        <span className="text-muted-foreground">airwaybill_number</span>
+                        <span className="font-medium">{detail.airwaybill_number}</span>
+                        {detail.tracking_number && (
+                          <>
+                            <span className="text-muted-foreground">tracking_number</span>
+                            <span>{detail.tracking_number}</span>
+                          </>
                         )}
                       </div>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleDownloadLabel(detail)}
-                      >
-                        <FileText className="size-4" />
-                        Label
-                      </Button>
                     </div>
                   </div>
-                </>
-              )}
+                )}
 
-              {/* Submit button */}
-              {isSubmittable(detail) && (
-                <>
-                  <Separator />
-                  <Button
-                    className="w-full"
-                    onClick={() => {
-                      handleSubmitSingle(detail.id);
-                      setDetailOpen(false);
-                    }}
-                    disabled={submitting.has(detail.id)}
-                  >
-                    <Send className="size-4" />
-                    {submitting.has(detail.id)
-                      ? "Submitting..."
-                      : "Submit to Naqel"}
-                  </Button>
-                </>
-              )}
-            </div>
+                {detail.status === "submit_failed" && detail.status_message && (
+                  <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs font-mono text-red-700 break-all">
+                    <p className="font-semibold mb-1">Error:</p>
+                    {detail.status_message}
+                  </div>
+                )}
+              </TabsContent>
+
+              {/* ── Items Tab ──────────────────────────── */}
+              <TabsContent value="items" className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold">
+                    Items ({detail.items.length})
+                  </p>
+                  {detail.items.map((item) => (
+                    <div
+                      key={item.id}
+                      className="flex items-start justify-between rounded-md border p-3 text-sm"
+                    >
+                      <div className="flex-1">
+                        <div className="font-medium">
+                          {item.goods_description}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Qty: {item.quantity} | {item.weight_value} kg
+                        </div>
+                      </div>
+                      <div className="font-medium">
+                        {item.customs_value.toFixed(2)} {item.customs_currency}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <Separator />
+
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div className="text-muted-foreground">Total Weight</div>
+                  <div>{detail.shipment_weight_value} kg</div>
+                  <div className="text-muted-foreground">Total Pieces</div>
+                  <div>{detail.number_of_pieces}</div>
+                  {detail.customs_declared_value != null && (
+                    <>
+                      <div className="text-muted-foreground">Total Customs Value</div>
+                      <div>
+                        {detail.customs_declared_value}{" "}
+                        {detail.customs_value_currency}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </TabsContent>
+            </Tabs>
           )}
         </DialogContent>
       </Dialog>

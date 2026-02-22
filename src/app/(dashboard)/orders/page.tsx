@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -26,8 +29,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
-import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import {
   RefreshCw,
@@ -35,24 +38,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Truck,
+  Languages,
+  MapPin,
+  Save,
+  Download,
+  Check,
 } from "lucide-react";
 
-interface WooOrder {
-  id: number;
-  number: string;
-  status: string;
-  currency: string;
-  date_created: string;
-  total: string;
-  shipping_total: string;
-  discount_total: string;
-  payment_method: string;
-  payment_method_title: string;
-  customer_note: string;
-  billing: WooAddress;
-  shipping: WooAddress;
-  line_items: WooLineItem[];
-}
+// ── Types ──────────────────────────────────────────────────────
 
 interface WooAddress {
   first_name: string;
@@ -78,6 +71,52 @@ interface WooLineItem {
   sku: string;
   price: number;
 }
+
+interface WooMeta {
+  id: number;
+  key: string;
+  value: string;
+}
+
+interface WooOrder {
+  id: number;
+  number: string;
+  status: string;
+  currency: string;
+  date_created: string;
+  total: string;
+  shipping_total: string;
+  discount_total: string;
+  payment_method: string;
+  payment_method_title: string;
+  customer_note: string;
+  billing: WooAddress;
+  shipping: WooAddress;
+  line_items: WooLineItem[];
+  meta_data?: WooMeta[];
+}
+
+interface CityMatchResult {
+  confidence: "exact" | "fuzzy" | "gemini" | "none";
+  matchedCity: {
+    countryCode: string;
+    cityEN: string;
+    cityAR: string;
+    cityCode: string;
+    countryCurrency: string;
+  } | null;
+  score: number;
+  alternatives: { city: { cityEN: string; cityCode: string }; score: number }[];
+  originalInput: string;
+}
+
+// ── Constants ──────────────────────────────────────────────────
+
+const CARRIERS = [
+  { value: "naqel", label: "Naqel" },
+  { value: "smsa", label: "SMSA" },
+  { value: "dhl", label: "DHL (coming soon)", disabled: true },
+];
 
 const WC_STATUS_COLORS: Record<string, string> = {
   pending: "bg-gray-100 text-gray-700",
@@ -105,32 +144,176 @@ const WC_STATUSES = [
   "failed",
 ];
 
+const CONFIDENCE_COLORS: Record<string, string> = {
+  exact: "bg-green-100 text-green-700",
+  fuzzy: "bg-yellow-100 text-yellow-700",
+  gemini: "bg-orange-100 text-orange-700",
+  none: "bg-red-100 text-red-700",
+};
+
+// ── Helpers ────────────────────────────────────────────────────
+
 function StatusBadge({ status }: { status: string }) {
   const cls = WC_STATUS_COLORS[status] || "bg-gray-100 text-gray-700";
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}
-    >
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>
       {status}
     </span>
   );
 }
 
+function hasNonLatin(text: string): boolean {
+  return /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0400-\u04FF\u4E00-\u9FFF]/.test(text);
+}
+
+function getCarrierFromMeta(meta?: WooMeta[]): string {
+  if (!meta) return "";
+  const carrier = meta.find((m) => m.key === "bzrc_carrier");
+  return carrier?.value?.toLowerCase() || "";
+}
+
+function getMetaValue(meta: WooMeta[] | undefined, key: string): string {
+  if (!meta) return "";
+  return meta.find((m) => m.key === key)?.value || "";
+}
+
+// ── Editable Address Component ─────────────────────────────────
+
+function AddressEditor({
+  address,
+  onChange,
+  prefix,
+  onTranslate,
+  translating,
+}: {
+  address: WooAddress;
+  onChange: (field: keyof WooAddress, value: string) => void;
+  prefix: string;
+  onTranslate: (fields: Record<string, string>) => void;
+  translating: boolean;
+}) {
+  const fields: { key: keyof WooAddress; label: string; half?: boolean }[] = [
+    { key: "first_name", label: "First Name", half: true },
+    { key: "last_name", label: "Last Name", half: true },
+    { key: "company", label: "Company" },
+    { key: "address_1", label: "Address Line 1" },
+    { key: "address_2", label: "Address Line 2" },
+    { key: "city", label: "City", half: true },
+    { key: "state", label: "State", half: true },
+    { key: "postcode", label: "Postcode", half: true },
+    { key: "country", label: "Country (ISO2)", half: true },
+    { key: "phone", label: "Phone" },
+    { key: "email", label: "Email" },
+  ];
+
+  const hasTranslatable = Object.values(address).some(
+    (v) => typeof v === "string" && hasNonLatin(v)
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-semibold">{prefix}</p>
+        {hasTranslatable && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              const toTranslate: Record<string, string> = {};
+              for (const f of fields) {
+                const val = address[f.key];
+                if (typeof val === "string" && hasNonLatin(val)) {
+                  toTranslate[f.key] = val;
+                }
+              }
+              onTranslate(toTranslate);
+            }}
+            disabled={translating}
+          >
+            <Languages className="size-3.5" />
+            {translating ? "Translating..." : "Translate"}
+          </Button>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {fields.map((f) => (
+          <div key={f.key} className={f.half ? "" : "col-span-2"}>
+            <Label className="text-xs text-muted-foreground">{f.label}</Label>
+            <Input
+              value={address[f.key] || ""}
+              onChange={(e) => onChange(f.key, e.target.value)}
+              className={`h-8 text-sm ${
+                typeof address[f.key] === "string" && hasNonLatin(address[f.key] || "")
+                  ? "border-orange-300 bg-orange-50"
+                  : ""
+              }`}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Main Page ──────────────────────────────────────────────────
+
 export default function OrdersPage() {
   const [orders, setOrders] = useState<WooOrder[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [statusFilter, setStatusFilter] = useState("nqlrdysbmt");
+  const [lastSynced, setLastSynced] = useState<string | null>(null);
 
-  // Selection for bulk shipment creation
-  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [creating, setCreating] = useState(false);
+
+  // Shipment existence tracking
+  const [orderShipmentMap, setOrderShipmentMap] = useState<Record<number, string>>({}); // orderId -> shipment status
 
   // Detail dialog
   const [detailOrder, setDetailOrder] = useState<WooOrder | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [editedShipping, setEditedShipping] = useState<WooAddress | null>(null);
+  const [editedBilling, setEditedBilling] = useState<WooAddress | null>(null);
+  const [editedNote, setEditedNote] = useState("");
+  const [selectedCarrier, setSelectedCarrier] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [translating, setTranslating] = useState(false);
+
+  // City match state
+  const [cityMatch, setCityMatch] = useState<CityMatchResult | null>(null);
+  const [matchingCity, setMatchingCity] = useState(false);
+  const [manualCityCode, setManualCityCode] = useState("");
+
+  // Track original for diff
+  const originalOrderRef = useRef<WooOrder | null>(null);
+
+  // ── Check shipments for displayed orders ────────────────
+
+  const checkShipmentsForOrders = async () => {
+    try {
+      // Fetch recent shipments and build a map of woo_order_id -> status
+      const res = await fetch("/api/shipments?limit=200");
+      const json = await res.json();
+      if (json.shipments) {
+        const map: Record<number, string> = {};
+        for (const s of json.shipments) {
+          if (s.woo_order_id) {
+            // Keep the most relevant status (submitted > created)
+            if (!map[s.woo_order_id] || s.status === "submitted" || s.status === "in_transit" || s.status === "delivered") {
+              map[s.woo_order_id] = s.status;
+            }
+          }
+        }
+        setOrderShipmentMap(map);
+      }
+    } catch {
+      // Silent fail — not critical
+    }
+  };
+
+  // ── Fetch Orders (manual sync only) ──────────────────────
 
   const fetchOrders = useCallback(
     async (p: number) => {
@@ -147,77 +330,305 @@ export default function OrdersPage() {
         if (json.error) {
           toast.error(json.error);
         } else {
-          setOrders(json.orders || []);
+          const fetchedOrders: WooOrder[] = json.orders || [];
+          setOrders(fetchedOrders);
           setTotalPages(json.totalPages || 1);
           setTotal(json.total || 0);
           setPage(p);
-          setSelected(new Set());
+          setLastSynced(new Date().toLocaleTimeString());
+
+          // Check which orders already have shipments
+          checkShipmentsForOrders();
         }
       } catch (err) {
-        toast.error(
-          err instanceof Error ? err.message : "Failed to fetch orders"
-        );
+        toast.error(err instanceof Error ? err.message : "Failed to fetch orders");
       }
       setLoading(false);
     },
     [statusFilter]
   );
 
+  // Auto-sync once on first mount
+  const initialSyncDone = useRef(false);
   useEffect(() => {
-    fetchOrders(1);
-  }, [fetchOrders]);
+    if (!initialSyncDone.current) {
+      initialSyncDone.current = true;
+      fetchOrders(1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const toggleSelect = (orderId: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(orderId)) next.delete(orderId);
-      else next.add(orderId);
-      return next;
-    });
-  };
+  // Re-fetch when filter changes IF we already synced
+  useEffect(() => {
+    if (lastSynced) {
+      fetchOrders(1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter]);
 
-  const toggleSelectAll = () => {
-    if (selected.size === orders.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(orders.map((o) => o.id)));
+  // ── Open detail dialog ───────────────────────────────────
+
+  const openDetail = (order: WooOrder) => {
+    setDetailOrder(order);
+    setEditedShipping({ ...order.shipping });
+    setEditedBilling({ ...order.billing });
+    setEditedNote(order.customer_note || "");
+    setSelectedCarrier(getCarrierFromMeta(order.meta_data));
+    setCityMatch(null);
+    // Pre-populate city code from WC meta if previously saved
+    const savedCityCode = getMetaValue(order.meta_data, "bzrc_city_code");
+    setManualCityCode(savedCityCode);
+    originalOrderRef.current = order;
+    setDetailOpen(true);
+
+    // Auto-run city match if no saved city code and city+country available
+    const city = order.shipping.city || order.billing.city;
+    const country = order.shipping.country || order.billing.country;
+    if (!savedCityCode && city && country) {
+      autoMatchCity(country, city);
     }
   };
 
-  const handleCreateShipments = async () => {
-    if (selected.size === 0) {
-      toast.error("Select at least one order");
+  // Auto city match (silent, no toast on start)
+  const autoMatchCity = async (countryCode: string, cityName: string) => {
+    setMatchingCity(true);
+    try {
+      const res = await fetch("/api/city-match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ countryCode, cityName }),
+      });
+      const json = await res.json();
+      if (!json.error) {
+        setCityMatch(json as CityMatchResult);
+        if (json.confidence === "exact") {
+          toast.success(`City matched: ${json.matchedCity?.cityEN} → ${json.matchedCity?.cityCode}`);
+        } else if (json.confidence !== "none") {
+          toast.info(`City ${json.confidence} match: ${json.matchedCity?.cityEN} (${Math.round(json.score * 100)}%)`);
+        }
+      }
+    } catch {
+      // Silent fail — user can still match manually
+    }
+    setMatchingCity(false);
+  };
+
+  // ── Translation ──────────────────────────────────────────
+
+  const handleTranslate = async (
+    fields: Record<string, string>,
+    target: "shipping" | "billing"
+  ) => {
+    setTranslating(true);
+    try {
+      const res = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fields }),
+      });
+      const json = await res.json();
+      if (json.error) {
+        toast.error(`Translation failed: ${json.error}`);
+      } else if (json.translations) {
+        const setter = target === "shipping" ? setEditedShipping : setEditedBilling;
+        setter((prev) => {
+          if (!prev) return prev;
+          const updated = { ...prev };
+          for (const [key, value] of Object.entries(json.translations)) {
+            (updated as Record<string, string>)[key] = value as string;
+          }
+          return updated;
+        });
+        toast.success("Fields translated");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Translation failed");
+    }
+    setTranslating(false);
+  };
+
+  // ── City Code Matching ───────────────────────────────────
+
+  const handleMatchCity = async () => {
+    if (!editedShipping) return;
+    setMatchingCity(true);
+    try {
+      const res = await fetch("/api/city-match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          countryCode: editedShipping.country,
+          cityName: editedShipping.city,
+        }),
+      });
+      const json = await res.json();
+      if (json.error) {
+        toast.error(`City match failed: ${json.error}`);
+      } else {
+        setCityMatch(json as CityMatchResult);
+        if (json.confidence === "exact") {
+          toast.success(`Exact match: ${json.matchedCity?.cityEN} (${json.matchedCity?.cityCode})`);
+        } else if (json.confidence === "none") {
+          toast.error("No city match found — please enter manually");
+        } else {
+          toast.info(
+            `${json.confidence} match: ${json.matchedCity?.cityEN} (${Math.round(json.score * 100)}%) — please confirm`
+          );
+        }
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "City match failed");
+    }
+    setMatchingCity(false);
+  };
+
+  // ── Save to WooCommerce ──────────────────────────────────
+
+  const handleSaveToWC = async () => {
+    if (!detailOrder) return;
+    setSaving(true);
+    try {
+      const updateData: Record<string, unknown> = {};
+
+      if (editedShipping && JSON.stringify(editedShipping) !== JSON.stringify(detailOrder.shipping)) {
+        updateData.shipping = editedShipping;
+      }
+      if (editedBilling && JSON.stringify(editedBilling) !== JSON.stringify(detailOrder.billing)) {
+        updateData.billing = editedBilling;
+      }
+      if (editedNote !== (detailOrder.customer_note || "")) {
+        updateData.customer_note = editedNote;
+      }
+
+      // Always save carrier + city code + country currency to WC meta
+      const currentCarrier = getCarrierFromMeta(detailOrder.meta_data);
+      const currentCityCode = getMetaValue(detailOrder.meta_data, "bzrc_city_code");
+      const currentCurrency = getMetaValue(detailOrder.meta_data, "bzrc_country_currency");
+      const cityCode = manualCityCode || cityMatch?.matchedCity?.cityCode || "";
+      const countryCurrency = cityMatch?.matchedCity?.countryCurrency || "";
+
+      const metaUpdates: { key: string; value: string }[] = [];
+      if (selectedCarrier !== currentCarrier) {
+        metaUpdates.push({ key: "bzrc_carrier", value: selectedCarrier });
+      }
+      if (cityCode && cityCode !== currentCityCode) {
+        metaUpdates.push({ key: "bzrc_city_code", value: cityCode });
+      }
+      if (countryCurrency && countryCurrency !== currentCurrency) {
+        metaUpdates.push({ key: "bzrc_country_currency", value: countryCurrency });
+      }
+      if (metaUpdates.length > 0) {
+        updateData.meta_data = metaUpdates;
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        toast.info("No changes to save");
+        setSaving(false);
+        return;
+      }
+
+      const res = await fetch(`/api/woo/orders/${detailOrder.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updateData),
+      });
+      const json = await res.json();
+      if (json.error) {
+        toast.error(`Save failed: ${json.error}`);
+      } else {
+        toast.success("Order saved to WooCommerce");
+        if (json.order) {
+          setDetailOrder(json.order);
+          originalOrderRef.current = json.order;
+          setEditedShipping({ ...json.order.shipping });
+          setEditedBilling({ ...json.order.billing });
+          setEditedNote(json.order.customer_note || "");
+          // Update carrier from saved meta
+          setSelectedCarrier(getCarrierFromMeta(json.order.meta_data));
+          // Update order in the list too
+          setOrders((prev) =>
+            prev.map((o) => (o.id === json.order.id ? json.order : o))
+          );
+        }
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Save failed");
+    }
+    setSaving(false);
+  };
+
+  // ── Create Shipment ──────────────────────────────────────
+
+  const handleCreateShipment = async () => {
+    if (!detailOrder) return;
+
+    if (!selectedCarrier) {
+      toast.error("Select a carrier first");
       return;
     }
-    setCreating(true);
-    let success = 0;
-    let failed = 0;
 
-    for (const orderId of selected) {
-      try {
-        const res = await fetch("/api/shipments", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ wooOrderId: orderId }),
-        });
-        const json = await res.json();
-        if (json.error) {
-          toast.error(`Order ${orderId}: ${json.error}`);
-          failed++;
-        } else {
-          success++;
-        }
-      } catch {
-        failed++;
-      }
+    if (!cityMatch?.matchedCity && !manualCityCode) {
+      toast.error("Run city match or enter city code manually");
+      return;
     }
 
-    if (success > 0)
-      toast.success(`${success} shipment(s) created`);
-    if (failed > 0) toast.error(`${failed} failed`);
-    setSelected(new Set());
+    setCreating(true);
+    try {
+      // Determine target currency from city match
+      const targetCurrency = cityMatch?.matchedCity?.countryCurrency;
+      let convertedTotal: number | undefined;
+      let convertedCurrency: string | undefined;
+
+      // Convert currency if order is in different currency than destination
+      if (targetCurrency && detailOrder.currency !== targetCurrency) {
+        try {
+          const rateRes = await fetch(
+            `/api/exchange-rates?from=${detailOrder.currency}&to=${targetCurrency}&amount=${detailOrder.total}`
+          );
+          const rateJson = await rateRes.json();
+          if (rateJson.converted_amount) {
+            convertedTotal = rateJson.converted_amount;
+            convertedCurrency = targetCurrency;
+            toast.info(
+              `Currency converted: ${detailOrder.total} ${detailOrder.currency} → ${convertedTotal!.toFixed(2)} ${targetCurrency}`
+            );
+          }
+        } catch {
+          // If conversion fails, proceed with original currency
+          toast.warning("Currency conversion failed — using original currency");
+        }
+      }
+
+      const res = await fetch("/api/shipments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wooOrderId: detailOrder.id,
+          carrier: selectedCarrier,
+          cityCode: manualCityCode || cityMatch?.matchedCity?.cityCode,
+          countryCurrency: convertedCurrency || targetCurrency,
+          convertedTotal,
+        }),
+      });
+      const json = await res.json();
+      if (json.error) {
+        toast.error(json.error);
+      } else {
+        toast.success(`Shipment #${json.shipment.id} created`);
+        // Update the shipment map so the order row shows the indicator
+        setOrderShipmentMap((prev) => ({
+          ...prev,
+          [detailOrder.id]: json.shipment.status || "created",
+        }));
+        setDetailOpen(false);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    }
     setCreating(false);
   };
+
+  // ── UI Helpers ───────────────────────────────────────────
 
   const formatDate = (d: string) =>
     new Date(d).toLocaleDateString("en-US", {
@@ -232,40 +643,28 @@ export default function OrdersPage() {
     return name || `${o.billing.first_name} ${o.billing.last_name}`.trim();
   };
 
-  const shippingCountry = (o: WooOrder) =>
-    o.shipping.country || o.billing.country;
-
+  const shippingCountry = (o: WooOrder) => o.shipping.country || o.billing.country;
   const shippingCity = (o: WooOrder) => o.shipping.city || o.billing.city;
+
+  // ── Render ───────────────────────────────────────────────
 
   return (
     <div className="space-y-4">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Orders</h1>
           <p className="text-muted-foreground">
             WooCommerce orders {total > 0 && `(${total} total)`}
+            {lastSynced && (
+              <span className="ml-2 text-xs">Last synced: {lastSynced}</span>
+            )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {selected.size > 0 && (
-            <Button onClick={handleCreateShipments} disabled={creating}>
-              <Truck className="size-4" />
-              {creating
-                ? "Creating..."
-                : `Create Shipments (${selected.size})`}
-            </Button>
-          )}
-          <Button
-            variant="outline"
-            onClick={() => fetchOrders(page)}
-            disabled={loading}
-          >
-            <RefreshCw
-              className={`size-4 ${loading ? "animate-spin" : ""}`}
-            />
-            Refresh
-          </Button>
-        </div>
+        <Button onClick={() => fetchOrders(page || 1)} disabled={loading}>
+          <Download className="size-4" />
+          {loading ? "Syncing..." : "Sync Orders"}
+        </Button>
       </div>
 
       {/* Filters */}
@@ -286,17 +685,23 @@ export default function OrdersPage() {
         <Badge variant="outline" className="text-xs">
           Page {page}/{totalPages}
         </Badge>
-        {selected.size > 0 && (
-          <Badge className="bg-primary text-primary-foreground">
-            {selected.size} selected
-          </Badge>
-        )}
       </div>
 
-      {/* Table */}
-      {loading ? (
+      {/* Content */}
+      {!lastSynced && !loading ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+            <Download className="size-12 text-muted-foreground mb-4" />
+            <p className="text-lg font-medium">Click &quot;Sync Orders&quot; to load</p>
+            <p className="text-muted-foreground text-sm mt-1">
+              Orders are fetched on demand from WooCommerce
+            </p>
+          </CardContent>
+        </Card>
+      ) : loading ? (
         <div className="text-center py-8 text-muted-foreground">
-          Loading...
+          <RefreshCw className="size-6 animate-spin mx-auto mb-2" />
+          Syncing orders from WooCommerce...
         </div>
       ) : orders.length === 0 ? (
         <Card>
@@ -314,14 +719,6 @@ export default function OrdersPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[40px]">
-                    <Checkbox
-                      checked={
-                        selected.size === orders.length && orders.length > 0
-                      }
-                      onCheckedChange={toggleSelectAll}
-                    />
-                  </TableHead>
                   <TableHead className="w-[90px]">#</TableHead>
                   <TableHead>Customer</TableHead>
                   <TableHead>Destination</TableHead>
@@ -333,52 +730,45 @@ export default function OrdersPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {orders.map((order) => (
+                {orders.map((order) => {
+                  const shipmentStatus = orderShipmentMap[order.id];
+                  const hasShipment = !!shipmentStatus;
+                  const carrier = getCarrierFromMeta(order.meta_data);
+                  const cityCode = getMetaValue(order.meta_data, "bzrc_city_code");
+                  const isReady = !!carrier && !!cityCode;
+                  return (
                   <TableRow
                     key={order.id}
-                    className={`cursor-pointer hover:bg-muted/50 ${selected.has(order.id) ? "bg-muted/30" : ""}`}
+                    className={`cursor-pointer hover:bg-muted/50 ${hasShipment ? "bg-blue-50" : isReady ? "bg-green-50/50" : ""}`}
+                    onClick={() => openDetail(order)}
                   >
-                    <TableCell onClick={(e) => e.stopPropagation()}>
-                      <Checkbox
-                        checked={selected.has(order.id)}
-                        onCheckedChange={() => toggleSelect(order.id)}
-                      />
-                    </TableCell>
-                    <TableCell
-                      className="font-medium"
-                      onClick={() => {
-                        setDetailOrder(order);
-                        setDetailOpen(true);
-                      }}
-                    >
-                      {order.number}
-                    </TableCell>
-                    <TableCell
-                      onClick={() => {
-                        setDetailOrder(order);
-                        setDetailOpen(true);
-                      }}
-                    >
-                      <div className="font-medium text-sm">
-                        {shippingName(order)}
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-1.5">
+                        {order.number}
+                        {hasShipment && (
+                          <span className="inline-flex items-center rounded-full bg-blue-100 text-blue-700 px-1.5 py-0.5 text-[10px] font-medium">
+                            <Check className="size-2.5 mr-0.5" />
+                            {shipmentStatus}
+                          </span>
+                        )}
+                        {!hasShipment && isReady && (
+                          <span className="inline-flex items-center rounded-full bg-green-100 text-green-700 px-1.5 py-0.5 text-[10px] font-medium">
+                            {carrier}/{cityCode}
+                          </span>
+                        )}
                       </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="font-medium text-sm">{shippingName(order)}</div>
                       <div className="text-xs text-muted-foreground">
                         {order.shipping.phone || order.billing.phone || ""}
                       </div>
                     </TableCell>
-                    <TableCell
-                      onClick={() => {
-                        setDetailOrder(order);
-                        setDetailOpen(true);
-                      }}
-                    >
-                      <span className="font-medium text-sm">
-                        {shippingCountry(order)}
-                      </span>
+                    <TableCell>
+                      <span className="font-medium text-sm">{shippingCountry(order)}</span>
                       {shippingCity(order) && (
                         <span className="text-xs text-muted-foreground">
-                          {" "}
-                          / {shippingCity(order)}
+                          {" "}/ {shippingCity(order)}
                         </span>
                       )}
                     </TableCell>
@@ -397,10 +787,7 @@ export default function OrdersPage() {
                     <TableCell>
                       <div className="text-xs">
                         {order.line_items.slice(0, 1).map((li) => (
-                          <span
-                            key={li.id}
-                            className="truncate block max-w-[180px]"
-                          >
+                          <span key={li.id} className="truncate block max-w-[180px]">
                             {li.quantity}x {li.name}
                           </span>
                         ))}
@@ -415,7 +802,8 @@ export default function OrdersPage() {
                       {formatDate(order.date_created)}
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
@@ -449,144 +837,328 @@ export default function OrdersPage() {
         </>
       )}
 
-      {/* Order Detail Dialog */}
+      {/* ── Order Detail Dialog ─────────────────────────────── */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Order #{detailOrder?.number}</DialogTitle>
             <DialogDescription>
-              WC ID: {detailOrder?.id} | {detailOrder?.status}
+              WC ID: {detailOrder?.id} | <StatusBadge status={detailOrder?.status || ""} />
+              {" | "}{detailOrder?.total} {detailOrder?.currency}
+              {detailOrder?.payment_method === "cod" && " | COD"}
             </DialogDescription>
           </DialogHeader>
 
-          {detailOrder && (
-            <div className="space-y-4 py-4">
-              {/* Shipping Address */}
-              <div className="space-y-2">
-                <p className="text-sm font-semibold">Shipping Address</p>
-                <div className="text-sm space-y-1">
-                  <div className="font-medium">
-                    {shippingName(detailOrder)}
-                  </div>
-                  <div>
-                    {detailOrder.shipping.phone || detailOrder.billing.phone}
-                  </div>
-                  <div>
-                    {detailOrder.shipping.address_1 ||
-                      detailOrder.billing.address_1}
-                  </div>
-                  {(detailOrder.shipping.address_2 ||
-                    detailOrder.billing.address_2) && (
-                    <div>
-                      {detailOrder.shipping.address_2 ||
-                        detailOrder.billing.address_2}
-                    </div>
-                  )}
-                  <div>
-                    {[
-                      shippingCity(detailOrder),
-                      detailOrder.shipping.postcode ||
-                        detailOrder.billing.postcode,
-                      shippingCountry(detailOrder),
-                    ]
-                      .filter(Boolean)
-                      .join(", ")}
-                  </div>
-                </div>
-              </div>
+          {detailOrder && editedShipping && editedBilling && (
+            <Tabs defaultValue="shipping" className="w-full">
+              <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="shipping">Shipping</TabsTrigger>
+                <TabsTrigger value="billing">Billing</TabsTrigger>
+                <TabsTrigger value="items">Items</TabsTrigger>
+                <TabsTrigger value="shipment">Shipment</TabsTrigger>
+              </TabsList>
 
-              <Separator />
+              {/* ── Shipping Tab ───────────────────────────── */}
+              <TabsContent value="shipping" className="space-y-4 mt-4">
+                <AddressEditor
+                  address={editedShipping}
+                  onChange={(field, value) =>
+                    setEditedShipping((prev) =>
+                      prev ? { ...prev, [field]: value } : prev
+                    )
+                  }
+                  prefix="Shipping Address"
+                  onTranslate={(fields) => handleTranslate(fields, "shipping")}
+                  translating={translating}
+                />
 
-              {/* Items */}
-              <div className="space-y-2">
-                <p className="text-sm font-semibold">
-                  Items ({detailOrder.line_items.length})
-                </p>
-                {detailOrder.line_items.map((li) => (
-                  <div
-                    key={li.id}
-                    className="flex items-start justify-between rounded-md border p-3 text-sm"
-                  >
-                    <div className="flex-1">
-                      <div className="font-medium">{li.name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {li.sku && `SKU: ${li.sku} | `}Qty: {li.quantity}
+                {/* City Code Match Section */}
+                <Separator />
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold">Naqel City Code Match</p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleMatchCity}
+                      disabled={matchingCity || !editedShipping.city || !editedShipping.country}
+                    >
+                      <MapPin className="size-3.5" />
+                      {matchingCity ? "Matching..." : "Match City"}
+                    </Button>
+                  </div>
+
+                  {cityMatch && (
+                    <div className="rounded-md border p-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Badge className={CONFIDENCE_COLORS[cityMatch.confidence]}>
+                          {cityMatch.confidence}
+                          {cityMatch.confidence === "fuzzy" &&
+                            ` (${Math.round(cityMatch.score * 100)}%)`}
+                        </Badge>
+                        {cityMatch.matchedCity ? (
+                          <span className="text-sm font-medium">
+                            {cityMatch.matchedCity.cityEN} → {cityMatch.matchedCity.cityCode}
+                          </span>
+                        ) : (
+                          <span className="text-sm text-muted-foreground">No match</span>
+                        )}
+                      </div>
+
+                      {/* Alternatives dropdown */}
+                      {cityMatch.alternatives.length > 0 && cityMatch.confidence !== "exact" && (
+                        <div className="space-y-1">
+                          <p className="text-xs text-muted-foreground">Alternatives:</p>
+                          <Select
+                            value={manualCityCode || cityMatch.matchedCity?.cityCode || ""}
+                            onValueChange={(val) => setManualCityCode(val)}
+                          >
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue placeholder="Select alternative" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {cityMatch.matchedCity && (
+                                <SelectItem value={cityMatch.matchedCity.cityCode}>
+                                  {cityMatch.matchedCity.cityEN} ({cityMatch.matchedCity.cityCode})
+                                </SelectItem>
+                              )}
+                              {cityMatch.alternatives.map((alt) => (
+                                <SelectItem key={alt.city.cityCode} value={alt.city.cityCode}>
+                                  {alt.city.cityEN} ({alt.city.cityCode}) —{" "}
+                                  {Math.round(alt.score * 100)}%
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+
+                      {/* Manual entry */}
+                      <div className="flex items-center gap-2">
+                        <Label className="text-xs whitespace-nowrap">Manual code:</Label>
+                        <Input
+                          value={manualCityCode}
+                          onChange={(e) => setManualCityCode(e.target.value)}
+                          placeholder="Enter city code"
+                          className="h-7 text-xs"
+                        />
                       </div>
                     </div>
-                    <div className="font-medium">
-                      {parseFloat(li.total).toFixed(2)} {detailOrder.currency}
+                  )}
+                </div>
+
+                <Separator />
+
+                {/* Customer Note */}
+                <div className="space-y-2">
+                  <Label className="text-sm font-semibold">Customer Note</Label>
+                  <Textarea
+                    value={editedNote}
+                    onChange={(e) => setEditedNote(e.target.value)}
+                    className="text-sm"
+                    rows={3}
+                  />
+                </div>
+
+                {/* Save Button */}
+                <Button className="w-full" variant="outline" onClick={handleSaveToWC} disabled={saving}>
+                  <Save className="size-4" />
+                  {saving ? "Saving..." : "Save Changes to WooCommerce"}
+                </Button>
+              </TabsContent>
+
+              {/* ── Billing Tab ────────────────────────────── */}
+              <TabsContent value="billing" className="space-y-4 mt-4">
+                <AddressEditor
+                  address={editedBilling}
+                  onChange={(field, value) =>
+                    setEditedBilling((prev) =>
+                      prev ? { ...prev, [field]: value } : prev
+                    )
+                  }
+                  prefix="Billing Address"
+                  onTranslate={(fields) => handleTranslate(fields, "billing")}
+                  translating={translating}
+                />
+
+                <Button className="w-full" variant="outline" onClick={handleSaveToWC} disabled={saving}>
+                  <Save className="size-4" />
+                  {saving ? "Saving..." : "Save Changes to WooCommerce"}
+                </Button>
+              </TabsContent>
+
+              {/* ── Items Tab ──────────────────────────────── */}
+              <TabsContent value="items" className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold">
+                    Items ({detailOrder.line_items.length})
+                  </p>
+                  {detailOrder.line_items.map((li) => (
+                    <div
+                      key={li.id}
+                      className="flex items-start justify-between rounded-md border p-3 text-sm"
+                    >
+                      <div className="flex-1">
+                        <div className="font-medium">{li.name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {li.sku && `SKU: ${li.sku} | `}Qty: {li.quantity}
+                        </div>
+                      </div>
+                      <div className="font-medium">
+                        {parseFloat(li.total).toFixed(2)} {detailOrder.currency}
+                      </div>
                     </div>
+                  ))}
+                </div>
+
+                <Separator />
+
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div className="text-muted-foreground">Shipping</div>
+                  <div className="text-right">
+                    {detailOrder.shipping_total} {detailOrder.currency}
                   </div>
-                ))}
-              </div>
-
-              <Separator />
-
-              {/* Totals */}
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                <div className="text-muted-foreground">Shipping</div>
-                <div className="text-right">
-                  {detailOrder.shipping_total} {detailOrder.currency}
+                  <div className="text-muted-foreground">Discount</div>
+                  <div className="text-right">
+                    {detailOrder.discount_total} {detailOrder.currency}
+                  </div>
+                  <div className="font-semibold">Total</div>
+                  <div className="text-right font-semibold">
+                    {detailOrder.total} {detailOrder.currency}
+                  </div>
+                  {detailOrder.payment_method === "cod" && (
+                    <>
+                      <div className="text-muted-foreground">COD</div>
+                      <div className="text-right font-medium text-orange-600">
+                        {detailOrder.total} {detailOrder.currency}
+                      </div>
+                    </>
+                  )}
                 </div>
-                <div className="font-semibold">Total</div>
-                <div className="text-right font-semibold">
-                  {detailOrder.total} {detailOrder.currency}
+              </TabsContent>
+
+              {/* ── Shipment Tab ───────────────────────────── */}
+              <TabsContent value="shipment" className="space-y-4 mt-4">
+                {/* Carrier Selection */}
+                <div className="space-y-2">
+                  <Label className="text-sm font-semibold">Carrier</Label>
+                  <Select value={selectedCarrier} onValueChange={setSelectedCarrier}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select carrier" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CARRIERS.map((c) => (
+                        <SelectItem key={c.value} value={c.value} disabled={c.disabled}>
+                          {c.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    WC meta bzrc_carrier:{" "}
+                    {getCarrierFromMeta(detailOrder.meta_data) || (
+                      <span className="text-red-600 font-medium">not set</span>
+                    )}
+                  </p>
+                  {!selectedCarrier && (
+                    <p className="text-xs text-red-600 font-medium">
+                      Carrier not selected — select a carrier to create shipment
+                    </p>
+                  )}
                 </div>
-                {detailOrder.payment_method === "cod" && (
-                  <>
-                    <div className="text-muted-foreground">COD</div>
-                    <div className="text-right font-medium text-orange-600">
+
+                <Separator />
+
+                {/* Summary */}
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold">Shipment Summary</p>
+                  <div className="grid grid-cols-2 gap-2 text-sm rounded-md border p-3">
+                    <div className="text-muted-foreground">Consignee</div>
+                    <div>
+                      {editedShipping?.first_name} {editedShipping?.last_name}
+                    </div>
+                    <div className="text-muted-foreground">Destination</div>
+                    <div>
+                      {editedShipping?.city}, {editedShipping?.country}
+                    </div>
+                    <div className="text-muted-foreground">City Code</div>
+                    <div>
+                      {manualCityCode || cityMatch?.matchedCity?.cityCode || (
+                        <span className="text-orange-600">Not matched yet</span>
+                      )}
+                    </div>
+                    <div className="text-muted-foreground">Carrier</div>
+                    <div className="font-medium capitalize">
+                      {selectedCarrier || <span className="text-red-600">Not selected</span>}
+                    </div>
+                    <div className="text-muted-foreground">Items</div>
+                    <div>{detailOrder.line_items.length} items</div>
+                    <div className="text-muted-foreground">Total</div>
+                    <div className="font-medium">
                       {detailOrder.total} {detailOrder.currency}
                     </div>
-                  </>
-                )}
-              </div>
-
-              {detailOrder.customer_note && (
-                <>
-                  <Separator />
-                  <div className="space-y-1">
-                    <p className="text-sm font-semibold">Customer Note</p>
-                    <div className="text-sm rounded-md bg-muted p-3">
-                      {detailOrder.customer_note}
-                    </div>
+                    {cityMatch?.matchedCity?.countryCurrency &&
+                      cityMatch.matchedCity.countryCurrency !== detailOrder.currency && (
+                      <>
+                        <div className="text-muted-foreground">Customs Currency</div>
+                        <div className="font-medium text-blue-600">
+                          {cityMatch.matchedCity.countryCurrency} (will be converted from {detailOrder.currency})
+                        </div>
+                      </>
+                    )}
+                    {detailOrder.payment_method === "cod" && (
+                      <>
+                        <div className="text-muted-foreground">COD</div>
+                        <div className="font-medium text-orange-600">
+                          {detailOrder.total} {detailOrder.currency}
+                        </div>
+                      </>
+                    )}
                   </div>
-                </>
-              )}
+                </div>
 
-              {/* Create Shipment Button */}
-              <Button
-                className="w-full"
-                onClick={async () => {
-                  setCreating(true);
-                  try {
-                    const res = await fetch("/api/shipments", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ wooOrderId: detailOrder.id }),
-                    });
-                    const json = await res.json();
-                    if (json.error) {
-                      toast.error(json.error);
-                    } else {
-                      toast.success(
-                        `Shipment #${json.shipment.id} created`
-                      );
-                      setDetailOpen(false);
-                    }
-                  } catch (err) {
-                    toast.error(
-                      err instanceof Error ? err.message : "Failed"
-                    );
-                  }
-                  setCreating(false);
-                }}
-                disabled={creating}
-              >
-                <Truck className="size-4" />
-                {creating ? "Creating..." : "Create Shipment"}
-              </Button>
-            </div>
+                {/* Validation warnings */}
+                {(!selectedCarrier || (!cityMatch?.matchedCity && !manualCityCode)) && (
+                  <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 space-y-1">
+                    {!selectedCarrier && (
+                      <div>&#x2716; Carrier is not selected</div>
+                    )}
+                    {!cityMatch?.matchedCity && !manualCityCode && (
+                      <div>&#x2716; City code is not matched — run city match or enter manually</div>
+                    )}
+                  </div>
+                )}
+
+                {/* Existing shipment warning */}
+                {detailOrder && orderShipmentMap[detailOrder.id] && (
+                  <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">
+                    <Check className="size-3.5 inline mr-1" />
+                    Shipment already exists for this order (status: <strong>{orderShipmentMap[detailOrder.id]}</strong>)
+                  </div>
+                )}
+
+                {/* Save carrier + city code to WC */}
+                <Button
+                  className="w-full"
+                  variant="outline"
+                  onClick={handleSaveToWC}
+                  disabled={saving}
+                >
+                  <Save className="size-4" />
+                  {saving ? "Saving..." : "Save Carrier & City Code to WC"}
+                </Button>
+
+                {/* Create Shipment Button */}
+                <Button
+                  className="w-full"
+                  onClick={handleCreateShipment}
+                  disabled={creating || !selectedCarrier || (!cityMatch?.matchedCity && !manualCityCode)}
+                >
+                  <Truck className="size-4" />
+                  {creating ? "Creating..." : "Create Shipment"}
+                </Button>
+              </TabsContent>
+            </Tabs>
           )}
         </DialogContent>
       </Dialog>

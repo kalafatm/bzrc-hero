@@ -71,3 +71,29 @@ export async function getOrder(orderId: number): Promise<WooOrder> {
   const { data } = await wooRequest<WooOrder>(`orders/${orderId}`);
   return data;
 }
+
+/**
+ * Update a WooCommerce order (PUT /orders/{id}).
+ * Only send changed fields — WC merges with existing data.
+ */
+export async function updateOrder(
+  orderId: number,
+  updateData: Record<string, unknown>
+): Promise<WooOrder> {
+  const url = buildUrl(`orders/${orderId}`);
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updateData),
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(
+      `WooCommerce API error: ${res.status} ${res.statusText} — ${body.substring(0, 200)}`
+    );
+  }
+
+  return (await res.json()) as WooOrder;
+}

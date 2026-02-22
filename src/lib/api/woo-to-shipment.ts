@@ -22,6 +22,9 @@ interface MapOptions {
   customer_code?: string;
   branch_code?: string;
   product_type?: string;
+  cityCode?: string;
+  countryCurrency?: string;
+  convertedTotal?: number;
   shipper?: {
     person_name: string;
     company_name?: string;
@@ -35,6 +38,8 @@ interface MapOptions {
 
 /**
  * Map a WooCommerce order to a ShipmentCreate payload for the remote API.
+ * If convertedTotal + countryCurrency provided, uses those for customs values.
+ * If cityCode provided, uses it for consignee city.
  */
 export function mapWooOrderToShipment(
   order: WooOrder,
@@ -48,21 +53,34 @@ export function mapWooOrderToShipment(
   const personName = `${addr.first_name} ${addr.last_name}`.trim();
   const phone = addr.phone || billing.phone || "";
 
+  // Determine customs currency and values
+  const customsCurrency = options?.countryCurrency || order.currency;
+  const orderTotal = Number(order.total);
+
+  // If converted total provided, calculate ratio for per-item conversion
+  const conversionRatio =
+    options?.convertedTotal && orderTotal > 0
+      ? options.convertedTotal / orderTotal
+      : 1;
+
   // Build items from line_items
-  const items: ShipmentItemCreate[] = order.line_items.map((li) => ({
-    quantity: li.quantity,
-    weight_value: 0.5, // default 0.5 kg per item (no weight info from WC)
-    weight_unit: 1,
-    customs_value: Number(li.total) || li.price * li.quantity,
-    customs_currency: order.currency,
-    goods_description: li.name.substring(0, 100),
-    commodity_code: li.sku || undefined,
-    package_type: "Box",
-    contains_dangerous_goods: false,
-    woo_order_item_id: li.id,
-    woo_product_id: li.product_id,
-    woo_variation_id: li.variation_id || undefined,
-  }));
+  const items: ShipmentItemCreate[] = order.line_items.map((li) => {
+    const itemValue = Number(li.total) || li.price * li.quantity;
+    return {
+      quantity: li.quantity,
+      weight_value: 0.5, // default 0.5 kg per item (no weight info from WC)
+      weight_unit: 1,
+      customs_value: Math.round(itemValue * conversionRatio * 100) / 100,
+      customs_currency: customsCurrency,
+      goods_description: li.name.substring(0, 100),
+      commodity_code: li.sku || undefined,
+      package_type: "Box",
+      contains_dangerous_goods: false,
+      woo_order_item_id: li.id,
+      woo_product_id: li.product_id,
+      woo_variation_id: li.variation_id || undefined,
+    };
+  });
 
   // Total weight = sum of item weights
   const totalWeight = items.reduce((sum, i) => sum + i.weight_value * i.quantity, 0);
@@ -73,8 +91,20 @@ export function mapWooOrderToShipment(
 
   // COD: if payment method is "cod"
   const isCod = order.payment_method === "cod";
+  const codAmount = isCod
+    ? Math.round(orderTotal * conversionRatio * 100) / 100
+    : undefined;
+
+  // Customs declared value (total, in destination currency)
+  const customsDeclaredValue =
+    options?.convertedTotal != null
+      ? Math.round(options.convertedTotal * 100) / 100
+      : orderTotal;
 
   const shipper = options?.shipper || DEFAULT_SHIPPER;
+
+  // Consignee city: use matched city code if provided, otherwise raw city from WC
+  const consigneeCity = options?.cityCode || addr.city;
 
   return {
     woo_order_id: order.id,
@@ -85,10 +115,10 @@ export function mapWooOrderToShipment(
     description_of_goods: descriptionOfGoods,
     number_of_pieces: 1,
     shipping_datetime: new Date().toISOString(),
-    cod_amount: isCod ? Number(order.total) : undefined,
-    cod_currency: isCod ? order.currency : undefined,
-    customs_declared_value: Number(order.total),
-    customs_value_currency: order.currency,
+    cod_amount: codAmount,
+    cod_currency: isCod ? customsCurrency : undefined,
+    customs_declared_value: customsDeclaredValue,
+    customs_value_currency: customsCurrency,
     shipment_weight_value: totalWeight || 0.5,
     shipment_weight_unit: 1,
     shipper_reference1: order.number,
@@ -101,7 +131,7 @@ export function mapWooOrderToShipment(
       cell_phone: phone,
       email: billing.email || undefined,
       country_code: addr.country, // ISO2 from WC
-      city: addr.city,
+      city: consigneeCity,
       line1: addr.address_1,
       line2: addr.address_2 || undefined,
       post_code: addr.postcode || undefined,

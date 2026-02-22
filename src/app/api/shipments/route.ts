@@ -27,18 +27,39 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/shipments — create shipment from a WC order
- * Body: { wooOrderId: number, customer_code?: string, branch_code?: string, product_type?: string }
+ * Body: { wooOrderId, carrier?, customer_code?, branch_code?, product_type?, cityCode?, countryCurrency?, convertedTotal? }
  */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { wooOrderId, customer_code, branch_code, product_type } = body;
+    const {
+      wooOrderId,
+      customer_code,
+      branch_code,
+      product_type,
+      cityCode,
+      countryCurrency,
+      convertedTotal,
+    } = body;
 
     if (!wooOrderId) {
       return NextResponse.json(
         { error: "wooOrderId is required" },
         { status: 400 }
       );
+    }
+
+    // Check for existing shipment with this order ID (prevent duplicates)
+    const existing = await listShipments({ woo_order_id: wooOrderId, limit: 1 });
+    if (existing.length > 0) {
+      const s = existing[0];
+      // Allow re-create only if previous shipment failed
+      if (s.status !== "submit_failed" && s.status !== "failed" && s.status !== "cancelled") {
+        return NextResponse.json(
+          { error: `Shipment #${s.id} already exists for order ${wooOrderId} (status: ${s.status})` },
+          { status: 409 }
+        );
+      }
     }
 
     // Fetch order from WooCommerce
@@ -49,6 +70,9 @@ export async function POST(req: NextRequest) {
       customer_code,
       branch_code,
       product_type,
+      cityCode,
+      countryCurrency,
+      convertedTotal,
     });
 
     // Create in remote shipping API
