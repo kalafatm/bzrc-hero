@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>bzrcMaster - Database ERD</title>
+<title>bzrcMaster — ERD v3.0</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -30,14 +30,14 @@
   }
   #header .info {
     font-size: 12px; color: #94a3b8;
-    display: flex; gap: 20px; align-items: center;
+    display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
   }
   #header .info .badge {
     background: #1e293b; border: 1px solid #334155;
     padding: 3px 10px; border-radius: 12px; font-size: 11px;
   }
   .legend {
-    display: flex; gap: 16px; align-items: center;
+    display: flex; gap: 14px; align-items: center;
   }
   .legend-item {
     display: flex; align-items: center; gap: 5px; font-size: 11px; color: #94a3b8;
@@ -52,8 +52,8 @@
   #canvas.grabbing { cursor: grabbing; }
   #diagram {
     position: relative;
-    width: 2200px;
-    height: 1500px;
+    width: 2400px;
+    height: 1600px;
     min-width: 100%;
     min-height: 100%;
   }
@@ -67,7 +67,7 @@
     background: #1e293b;
     border: 1px solid #334155;
     border-radius: 10px;
-    min-width: 220px;
+    min-width: 240px;
     box-shadow: 0 4px 20px rgba(0,0,0,0.3);
     z-index: 10;
     cursor: move;
@@ -92,8 +92,16 @@
   .table-header .db-name {
     font-size: 10px; font-weight: 400; opacity: 0.7;
   }
-  .table-body {
-    padding: 6px 0;
+  .table-body { padding: 6px 0; }
+  .section-label {
+    padding: 4px 14px 2px;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #475569;
+    border-top: 1px solid #334155;
+    margin-top: 2px;
   }
   .field-row {
     display: flex; align-items: center;
@@ -102,9 +110,7 @@
     gap: 8px;
     line-height: 1.5;
   }
-  .field-row:hover {
-    background: rgba(255,255,255,0.03);
-  }
+  .field-row:hover { background: rgba(255,255,255,0.03); }
   .field-icon {
     width: 14px; text-align: center; flex-shrink: 0;
     font-size: 10px;
@@ -122,9 +128,7 @@
     color: #64748b; font-family: 'JetBrains Mono', 'Cascadia Code', monospace;
     font-size: 10px; text-align: right;
   }
-  .field-nullable {
-    color: #475569; font-size: 9px;
-  }
+  .field-nullable { color: #475569; font-size: 9px; }
   .table-footer {
     padding: 5px 14px; border-top: 1px solid #334155;
     font-size: 10px; color: #64748b;
@@ -139,16 +143,16 @@
   }
 
   /* Color themes */
-  .theme-auth .table-header { background: linear-gradient(135deg, #7c3aed, #6d28d9); color: #f5f3ff; }
-  .theme-auth { border-color: #6d28d9; }
-  .theme-shared .table-header { background: linear-gradient(135deg, #0891b2, #0e7490); color: #ecfeff; }
-  .theme-shared { border-color: #0e7490; }
-  .theme-crm .table-header { background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #eff6ff; }
-  .theme-crm { border-color: #1d4ed8; }
   .theme-shipping .table-header { background: linear-gradient(135deg, #059669, #047857); color: #ecfdf5; }
   .theme-shipping { border-color: #047857; }
-  .theme-logging .table-header { background: linear-gradient(135deg, #d97706, #b45309); color: #fffbeb; }
-  .theme-logging { border-color: #b45309; }
+  .theme-cache .table-header { background: linear-gradient(135deg, #d97706, #b45309); color: #fffbeb; }
+  .theme-cache { border-color: #b45309; }
+  .theme-external .table-header { background: linear-gradient(135deg, #7c3aed, #6d28d9); color: #f5f3ff; }
+  .theme-external { border-color: #6d28d9; }
+  .theme-sheets .table-header { background: linear-gradient(135deg, #0891b2, #0e7490); color: #ecfeff; }
+  .theme-sheets { border-color: #0e7490; }
+  .theme-api .table-header { background: linear-gradient(135deg, #dc2626, #b91c1c); color: #fef2f2; }
+  .theme-api { border-color: #b91c1c; }
 
   /* Zoom controls */
   #zoom-controls {
@@ -170,20 +174,19 @@
 <div id="header">
   <h1>
     <span class="logo">BM</span>
-    bzrcMaster — Database ERD
+    bzrcMaster — ERD v3.0
   </h1>
   <div class="info">
     <div class="legend">
-      <div class="legend-item"><div class="legend-dot" style="background:#7c3aed"></div> Auth</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#0891b2"></div> Shared</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#2563eb"></div> CRM</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#059669"></div> Shipping</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#d97706"></div> Logging</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#059669"></div> Shipping DB</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#d97706"></div> Cache</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#7c3aed"></div> WooCommerce</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#0891b2"></div> Google Sheets</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#dc2626"></div> External API</div>
     </div>
-    <span class="badge">15 Tables</span>
-    <span class="badge">PostgreSQL 16</span>
-    <span class="badge">Prisma 6</span>
-    <span class="badge">Drag tables to rearrange</span>
+    <span class="badge">3 DB Tables + 4 Sheets + 3 APIs</span>
+    <span class="badge">PostgreSQL 16 (bzrc_shipping_integ)</span>
+    <span class="badge">Drag to rearrange</span>
   </div>
 </div>
 
@@ -194,333 +197,252 @@
 </div>
 
 <div id="zoom-controls">
-  <button onclick="zoomOut()">−</button>
+  <button onclick="zoomOut()">&#x2212;</button>
   <span id="zoom-level">100%</span>
   <button onclick="zoomIn()">+</button>
-  <button onclick="zoomReset()">⟳</button>
+  <button onclick="zoomReset()">&#x27F3;</button>
 </div>
 
 <script>
 const tables = [
-  {
-    id: 'users', model: 'User', dbName: 'users', theme: 'auth',
-    x: 40, y: 30,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'email', type: 'VarChar(150)', unique: true },
-      { name: 'passwordHash', type: 'VarChar(200)' },
-      { name: 'firstName', type: 'VarChar(50)' },
-      { name: 'lastName', type: 'VarChar(50)' },
-      { name: 'phone', type: 'VarChar(30)', nullable: true },
-      { name: 'isActive', type: 'Boolean' },
-      { name: 'isVerified', type: 'Boolean' },
-      { name: 'lastLoginAt', type: 'Timestamptz', nullable: true },
-      { name: 'createdAt', type: 'Timestamptz' },
-      { name: 'updatedAt', type: 'Timestamptz' },
-    ]
-  },
-  {
-    id: 'roles', model: 'Role', dbName: 'roles', theme: 'auth',
-    x: 40, y: 380,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'name', type: 'VarChar(30)', unique: true },
-      { name: 'description', type: 'VarChar(200)', nullable: true },
-    ]
-  },
-  {
-    id: 'user_roles', model: 'UserRole', dbName: 'user_roles', theme: 'auth',
-    x: 300, y: 200,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'userId', type: 'Int', fk: 'users' },
-      { name: 'roleId', type: 'Int', fk: 'roles' },
-      { name: 'createdAt', type: 'Timestamptz' },
-    ],
-    uniques: ['userId + roleId']
-  },
-  {
-    id: 'countries', model: 'Country', dbName: 'countries', theme: 'shared',
-    x: 540, y: 30,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'name', type: 'VarChar(100)' },
-      { name: 'nameLocal', type: 'VarChar(100)', nullable: true },
-      { name: 'iso2', type: 'Char(2)', unique: true },
-      { name: 'iso3', type: 'Char(3)', unique: true },
-      { name: 'naqelShipmentCode', type: 'VarChar(5)', nullable: true },
-      { name: 'naqelSortationCode', type: 'VarChar(5)', nullable: true },
-      { name: 'currencyCode', type: 'Char(3)' },
-      { name: 'phonePrefix', type: 'VarChar(5)', nullable: true },
-      { name: 'isActive', type: 'Boolean' },
-    ]
-  },
-  {
-    id: 'currencies', model: 'Currency', dbName: 'currencies', theme: 'shared',
-    x: 300, y: 380,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'code', type: 'Char(3)', unique: true },
-      { name: 'name', type: 'VarChar(50)' },
-      { name: 'symbol', type: 'VarChar(5)', nullable: true },
-      { name: 'decimalPlaces', type: 'Int' },
-    ]
-  },
-  {
-    id: 'settings', model: 'Setting', dbName: 'settings', theme: 'shared',
-    x: 300, y: 530,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'domain', type: 'VarChar(30)' },
-      { name: 'key', type: 'VarChar(100)' },
-      { name: 'value', type: 'Json' },
-      { name: 'description', type: 'VarChar(200)', nullable: true },
-      { name: 'updatedAt', type: 'Timestamptz' },
-    ],
-    uniques: ['domain + key']
-  },
-  {
-    id: 'stores', model: 'Store', dbName: 'stores', theme: 'crm',
-    x: 540, y: 360,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'name', type: 'VarChar(100)' },
-      { name: 'slug', type: 'VarChar(50)', unique: true },
-      { name: 'domain', type: 'VarChar(100)', unique: true },
-      { name: 'wooBaseUrl', type: 'VarChar(200)', nullable: true },
-      { name: 'wooConsumerKey', type: 'VarChar(200)', nullable: true },
-      { name: 'wooConsumerSecretEnc', type: 'Text', nullable: true },
-      { name: 'wooApiVersion', type: 'VarChar(10)' },
-      { name: 'defaultCurrency', type: 'Char(3)' },
-      { name: 'defaultCountryId', type: 'Int', fk: 'countries', nullable: true },
-      { name: 'defaultCredentialId', type: 'Int', fk: 'shipping_credentials', nullable: true },
-      { name: 'isActive', type: 'Boolean' },
-      { name: 'lastSyncAt', type: 'Timestamptz', nullable: true },
-      { name: 'lastSyncStatus', type: 'VarChar(20)', nullable: true },
-      { name: 'lastSyncResult', type: 'Json', nullable: true },
-      { name: 'config', type: 'Json' },
-      { name: 'createdAt', type: 'Timestamptz' },
-      { name: 'updatedAt', type: 'Timestamptz' },
-    ]
-  },
-  {
-    id: 'customers', model: 'Customer', dbName: 'customers', theme: 'crm',
-    x: 830, y: 30,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'storeId', type: 'Int', fk: 'stores' },
-      { name: 'wooCustomerId', type: 'Int', nullable: true },
-      { name: 'firstName', type: 'VarChar(50)' },
-      { name: 'lastName', type: 'VarChar(50)' },
-      { name: 'email', type: 'VarChar(100)', nullable: true },
-      { name: 'phone', type: 'VarChar(30)', nullable: true },
-      { name: 'companyName', type: 'VarChar(100)', nullable: true },
-      { name: 'type', type: 'VarChar(20)' },
-      { name: 'countryId', type: 'Int', fk: 'countries', nullable: true },
-      { name: 'city', type: 'VarChar(50)', nullable: true },
-      { name: 'addressLine1', type: 'VarChar(200)', nullable: true },
-      { name: 'totalOrders', type: 'Int' },
-      { name: 'totalSpent', type: 'Decimal(12,2)' },
-      { name: 'createdAt', type: 'Timestamptz' },
-      { name: 'updatedAt', type: 'Timestamptz' },
-    ],
-    uniques: ['storeId + wooCustomerId'],
-    indexes: ['email']
-  },
-  {
-    id: 'orders', model: 'Order', dbName: 'orders', theme: 'crm',
-    x: 1120, y: 30,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'storeId', type: 'Int', fk: 'stores' },
-      { name: 'source', type: 'VarChar(20)' },
-      { name: 'sourceOrderId', type: 'VarChar(50)', nullable: true },
-      { name: 'sourceOrderNumber', type: 'VarChar(50)', nullable: true },
-      { name: 'customerId', type: 'Int', fk: 'customers', nullable: true },
-      { name: 'status', type: 'VarChar(30)' },
-      { name: 'currency', type: 'Char(3)' },
-      { name: 'subtotal', type: 'Decimal(12,2)' },
-      { name: 'shippingTotal', type: 'Decimal(12,2)' },
-      { name: 'taxTotal', type: 'Decimal(12,2)' },
-      { name: 'discountTotal', type: 'Decimal(12,2)' },
-      { name: 'grandTotal', type: 'Decimal(12,2)' },
-      { name: 'paymentMethod', type: 'VarChar(50)', nullable: true },
-      { name: 'codAmount', type: 'Decimal(12,2)', nullable: true },
-      { name: 'notes', type: 'Text', nullable: true },
-      { name: 'internalNotes', type: 'Text', nullable: true },
-      { name: 'shippingName', type: 'VarChar(100)', nullable: true },
-      { name: 'shippingPhone', type: 'VarChar(30)', nullable: true },
-      { name: 'shippingCountryCode', type: 'Char(3)', nullable: true },
-      { name: 'shippingCity', type: 'VarChar(50)', nullable: true },
-      { name: 'shippingAddress1', type: 'VarChar(200)', nullable: true },
-      { name: 'shippingAddress2', type: 'VarChar(100)', nullable: true },
-      { name: 'shippingPostCode', type: 'VarChar(30)', nullable: true },
-      { name: 'enrichmentResult', type: 'Json', nullable: true },
-      { name: 'enrichedAt', type: 'Timestamptz', nullable: true },
-      { name: 'orderedAt', type: 'Timestamptz', nullable: true },
-      { name: 'syncedAt', type: 'Timestamptz', nullable: true },
-      { name: 'createdAt', type: 'Timestamptz' },
-      { name: 'updatedAt', type: 'Timestamptz' },
-    ],
-    uniques: ['storeId + source + sourceOrderId'],
-    indexes: ['status', 'shippingCountryCode', 'orderedAt', 'createdAt']
-  },
-  {
-    id: 'order_items', model: 'OrderItem', dbName: 'order_items', theme: 'crm',
-    x: 1430, y: 30,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'orderId', type: 'Int', fk: 'orders' },
-      { name: 'sku', type: 'VarChar(50)', nullable: true },
-      { name: 'name', type: 'VarChar(200)' },
-      { name: 'quantity', type: 'Int' },
-      { name: 'unitPrice', type: 'Decimal(12,2)' },
-      { name: 'totalPrice', type: 'Decimal(12,2)' },
-      { name: 'weightKg', type: 'Decimal(10,3)', nullable: true },
-      { name: 'commodityCode', type: 'VarChar(15)', nullable: true },
-      { name: 'countryOfOrigin', type: 'Char(3)', nullable: true },
-      { name: 'goodsDescription', type: 'VarChar(200)', nullable: true },
-      { name: 'metaData', type: 'Json', nullable: true },
-    ]
-  },
-  {
-    id: 'shipping_credentials', model: 'ShippingCredential', dbName: 'shipping_credentials', theme: 'shipping',
-    x: 540, y: 820,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'carrier', type: 'VarChar(20)' },
-      { name: 'label', type: 'VarChar(100)' },
-      { name: 'countryId', type: 'Int', fk: 'countries', nullable: true },
-      { name: 'customerCode', type: 'VarChar(20)' },
-      { name: 'branchCode', type: 'VarChar(20)' },
-      { name: 'supplierCode', type: 'VarChar(10)' },
-      { name: 'username', type: 'VarChar(100)' },
-      { name: 'passwordEncrypted', type: 'Text' },
-      { name: 'baseUrl', type: 'VarChar(200)' },
-      { name: 'accessToken', type: 'Text', nullable: true },
-      { name: 'tokenExpiresAt', type: 'Timestamptz', nullable: true },
-      { name: 'isActive', type: 'Boolean' },
-      { name: 'isDefault', type: 'Boolean' },
-      { name: 'config', type: 'Json' },
-      { name: 'createdAt', type: 'Timestamptz' },
-      { name: 'updatedAt', type: 'Timestamptz' },
-    ]
-  },
+  // ══════════════════════════════════════════════════
+  // PostgreSQL — bzrc_shipping_integ
+  // ══════════════════════════════════════════════════
   {
     id: 'shipments', model: 'Shipment', dbName: 'shipments', theme: 'shipping',
-    x: 1120, y: 880,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'orderId', type: 'Int', fk: 'orders' },
-      { name: 'credentialId', type: 'Int', fk: 'shipping_credentials' },
-      { name: 'carrier', type: 'VarChar(20)' },
-      { name: 'status', type: 'VarChar(30)' },
-      { name: 'airwaybillNumber', type: 'VarChar(50)', nullable: true },
-      { name: 'productType', type: 'VarChar(5)' },
-      { name: 'shippingDate', type: 'Timestamptz', nullable: true },
-      { name: 'codAmount', type: 'Decimal(12,2)', nullable: true },
-      { name: 'codCurrency', type: 'Char(3)', nullable: true },
-      { name: 'customsDeclaredValue', type: 'Decimal(12,2)', nullable: true },
-      { name: 'customsCurrency', type: 'Char(3)', nullable: true },
-      { name: 'weightValue', type: 'Decimal(10,2)', nullable: true },
-      { name: 'numberOfPieces', type: 'Int' },
-      { name: 'descriptionOfGoods', type: 'VarChar(100)', nullable: true },
-      { name: 'consigneeName', type: 'VarChar(50)', nullable: true },
-      { name: 'consigneePhone', type: 'VarChar(30)', nullable: true },
-      { name: 'consigneeCountryCode', type: 'VarChar(5)', nullable: true },
-      { name: 'consigneeCity', type: 'VarChar(50)', nullable: true },
-      { name: 'consigneeAddress1', type: 'VarChar(200)', nullable: true },
-      { name: 'apiRequest', type: 'Json', nullable: true },
-      { name: 'apiResponse', type: 'Json', nullable: true },
-      { name: 'errorMessage', type: 'Text', nullable: true },
-      { name: 'retryCount', type: 'Int' },
-      { name: 'deliveredAt', type: 'Timestamptz', nullable: true },
-      { name: 'createdAt', type: 'Timestamptz' },
-      { name: 'updatedAt', type: 'Timestamptz' },
-    ],
-    indexes: ['status', 'airwaybillNumber', 'carrier', 'createdAt']
+    x: 500, y: 40,
+    sections: [
+      { label: 'Identity' },
+      { name: 'id', type: 'BIGINT', pk: true },
+      { name: 'woo_order_id', type: 'BIGINT', idx: true, nullable: true },
+      { name: 'woo_order_number', type: 'TEXT', nullable: true },
+      { label: 'Carrier Config' },
+      { name: 'carrier_code', type: 'TEXT' },
+      { name: 'customer_code', type: 'TEXT' },
+      { name: 'branch_code', type: 'TEXT' },
+      { name: 'airwaybill_number', type: 'TEXT', idx: true, nullable: true },
+      { name: 'product_type', type: 'TEXT' },
+      { label: 'Shipment Details' },
+      { name: 'shipping_datetime', type: 'TIMESTAMPTZ' },
+      { name: 'description_of_goods', type: 'TEXT' },
+      { name: 'number_of_pieces', type: 'INT' },
+      { name: 'cod_amount', type: 'NUMERIC(12,2)', nullable: true },
+      { name: 'cod_currency', type: 'VARCHAR(3)', nullable: true },
+      { name: 'customs_declared_value', type: 'NUMERIC(12,2)', nullable: true },
+      { name: 'customs_value_currency', type: 'VARCHAR(3)', nullable: true },
+      { label: 'Weight' },
+      { name: 'shipment_weight_value', type: 'NUMERIC(10,3)' },
+      { name: 'shipment_weight_unit', type: 'SMALLINT' },
+      { label: 'Consignee' },
+      { name: 'consignee_person_name', type: 'TEXT' },
+      { name: 'consignee_country_code', type: 'VARCHAR(2)' },
+      { name: 'consignee_city', type: 'TEXT' },
+      { name: 'consignee_line1', type: 'TEXT' },
+      { name: 'consignee_phone1', type: 'TEXT', nullable: true },
+      { name: '... +15 consignee cols', type: '', nullable: true },
+      { label: 'Shipper' },
+      { name: 'shipper_person_name', type: 'TEXT' },
+      { name: 'shipper_country_code', type: 'VARCHAR(2)' },
+      { name: 'shipper_city', type: 'TEXT' },
+      { name: '... +14 shipper cols', type: '', nullable: true },
+      { label: 'Status & Tracking' },
+      { name: 'status', type: 'TEXT', idx: true },
+      { name: 'status_message', type: 'TEXT', nullable: true },
+      { name: 'tracking_number', type: 'TEXT', nullable: true },
+      { label: 'Carrier Payloads' },
+      { name: 'carrier_request_payload', type: 'JSON', nullable: true },
+      { name: 'carrier_response_payload', type: 'JSON', nullable: true },
+      { name: 'label_base64', type: 'TEXT', nullable: true },
+      { label: 'Timestamps' },
+      { name: 'created_at', type: 'TIMESTAMPTZ' },
+      { name: 'updated_at', type: 'TIMESTAMPTZ' },
+    ]
   },
   {
     id: 'shipment_items', model: 'ShipmentItem', dbName: 'shipment_items', theme: 'shipping',
-    x: 1430, y: 450,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'shipmentId', type: 'Int', fk: 'shipments' },
-      { name: 'orderItemId', type: 'Int', fk: 'order_items', nullable: true },
-      { name: 'quantity', type: 'Int' },
-      { name: 'weightValue', type: 'Decimal(10,2)', nullable: true },
-      { name: 'customsValue', type: 'Decimal(12,2)', nullable: true },
-      { name: 'commodityCode', type: 'VarChar(15)', nullable: true },
-      { name: 'goodsDescription', type: 'VarChar(100)', nullable: true },
-      { name: 'countryOfOrigin', type: 'Char(3)', nullable: true },
-      { name: 'packageType', type: 'VarChar(50)', nullable: true },
+    x: 880, y: 40,
+    sections: [
+      { name: 'id', type: 'BIGINT', pk: true },
+      { name: 'shipment_id', type: 'BIGINT', fk: 'shipments' },
+      { name: 'woo_order_item_id', type: 'BIGINT', nullable: true },
+      { name: 'woo_product_id', type: 'BIGINT', nullable: true },
+      { name: 'woo_variation_id', type: 'BIGINT', nullable: true },
+      { label: 'Item Details' },
+      { name: 'quantity', type: 'INT' },
+      { name: 'weight_value', type: 'NUMERIC(10,3)' },
+      { name: 'weight_unit', type: 'SMALLINT' },
+      { name: 'customs_value', type: 'NUMERIC(12,2)' },
+      { name: 'customs_currency', type: 'VARCHAR(3)' },
+      { name: 'goods_description', type: 'TEXT' },
+      { name: 'commodity_code', type: 'TEXT', nullable: true },
+      { name: 'package_type', type: 'TEXT', nullable: true },
+      { name: 'contains_dangerous_goods', type: 'BOOLEAN' },
+      { name: 'country_of_origin', type: 'VARCHAR(2)', nullable: true },
+      { label: 'Timestamps' },
+      { name: 'created_at', type: 'TIMESTAMPTZ' },
+      { name: 'updated_at', type: 'TIMESTAMPTZ' },
     ]
   },
   {
-    id: 'labels', model: 'Label', dbName: 'labels', theme: 'shipping',
-    x: 1700, y: 880,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'shipmentId', type: 'Int', fk: 'shipments' },
-      { name: 'airwaybillNumber', type: 'VarChar(50)', nullable: true },
-      { name: 'format', type: 'VarChar(5)' },
-      { name: 'size', type: 'VarChar(5)' },
-      { name: 'contentBase64', type: 'Text', nullable: true },
-      { name: 'filePath', type: 'VarChar(300)', nullable: true },
-      { name: 'isBulk', type: 'Boolean' },
-      { name: 'bulkAwbs', type: 'Json', nullable: true },
-      { name: 'createdAt', type: 'Timestamptz' },
+    id: 'exchange_rates', model: 'ExchangeRate', dbName: 'exchange_rates', theme: 'cache',
+    x: 880, y: 520,
+    sections: [
+      { name: 'id', type: 'BIGINT', pk: true },
+      { name: 'currency_code', type: 'VARCHAR(3)', unique: true },
+      { name: 'rate_to_usd', type: 'FLOAT' },
+      { name: 'forex_buying_try', type: 'FLOAT', nullable: true },
+      { name: 'forex_selling_try', type: 'FLOAT', nullable: true },
+      { name: 'unit', type: 'INT' },
+      { name: 'source_date', type: 'VARCHAR(20)', nullable: true },
+      { name: 'fetched_at', type: 'TIMESTAMPTZ' },
+      { name: 'updated_at', type: 'TIMESTAMPTZ' },
+    ]
+  },
+
+  // ══════════════════════════════════════════════════
+  // WooCommerce (External — master.bazaarica.com)
+  // ══════════════════════════════════════════════════
+  {
+    id: 'woo_orders', model: 'WC Order', dbName: 'WooCommerce REST API v3', theme: 'external',
+    x: 40, y: 40,
+    sections: [
+      { name: 'id', type: 'INT', pk: true },
+      { name: 'number', type: 'STRING' },
+      { name: 'status', type: 'STRING' },
+      { name: 'currency', type: 'STRING' },
+      { name: 'total', type: 'STRING' },
+      { name: 'payment_method', type: 'STRING' },
+      { label: 'Shipping Address' },
+      { name: 'shipping.first_name', type: 'STRING' },
+      { name: 'shipping.last_name', type: 'STRING' },
+      { name: 'shipping.country', type: 'STRING (ISO2)' },
+      { name: 'shipping.city', type: 'STRING' },
+      { name: 'shipping.address_1', type: 'STRING' },
+      { name: 'shipping.phone', type: 'STRING' },
+      { label: 'Line Items' },
+      { name: 'line_items[].id', type: 'INT' },
+      { name: 'line_items[].name', type: 'STRING' },
+      { name: 'line_items[].quantity', type: 'INT' },
+      { name: 'line_items[].total', type: 'STRING' },
+      { name: 'line_items[].sku', type: 'STRING' },
+      { label: 'bzrcMaster Meta (custom)' },
+      { name: 'meta: bzrc_carrier', type: 'naqel | smsa | dhl' },
+      { name: 'meta: bzrc_city_code', type: 'e.g. AMM0086' },
+      { name: 'meta: bzrc_country_currency', type: 'e.g. JOD' },
+    ]
+  },
+
+  // ══════════════════════════════════════════════════
+  // Google Sheets (Reference Data)
+  // ══════════════════════════════════════════════════
+  {
+    id: 'sheet_exit', model: 'exitLocation', dbName: 'Google Sheets', theme: 'sheets',
+    x: 40, y: 580,
+    sections: [
+      { name: 'Exit Country', type: 'e.g. Turkiye' },
+      { name: 'Exit Location Code', type: 'e.g. IST' },
+      { name: 'Destination Countries', type: 'SA / BH / AE / ...' },
+      { label: 'Parsed by code' },
+      { name: 'exitCountry', type: 'TR (resolved ISO2)' },
+      { name: 'exitLocationCode', type: 'IST' },
+      { name: 'destinationCountry', type: '1 row per dest' },
     ]
   },
   {
-    id: 'api_logs', model: 'ApiLog', dbName: 'api_logs', theme: 'logging',
-    x: 830, y: 880,
-    fields: [
-      { name: 'id', type: 'Int', pk: true },
-      { name: 'credentialId', type: 'Int', fk: 'shipping_credentials', nullable: true },
-      { name: 'carrier', type: 'VarChar(20)' },
-      { name: 'direction', type: 'VarChar(10)' },
-      { name: 'method', type: 'VarChar(10)' },
-      { name: 'endpoint', type: 'VarChar(200)' },
-      { name: 'requestBody', type: 'Json', nullable: true },
-      { name: 'responseStatus', type: 'Int', nullable: true },
-      { name: 'responseBody', type: 'Json', nullable: true },
-      { name: 'durationMs', type: 'Int', nullable: true },
-      { name: 'error', type: 'Text', nullable: true },
-      { name: 'shipmentId', type: 'Int', fk: 'shipments', nullable: true },
-      { name: 'createdAt', type: 'Timestamptz' },
-    ],
-    indexes: ['carrier', 'createdAt']
+    id: 'sheet_cities', model: 'naqelCityCodes', dbName: 'Google Sheets', theme: 'sheets',
+    x: 340, y: 580,
+    sections: [
+      { name: 'countryCode', type: 'VARCHAR(2)' },
+      { name: 'countryName', type: 'TEXT' },
+      { name: 'province', type: 'TEXT' },
+      { name: 'cityEN', type: 'TEXT' },
+      { name: 'cityAR', type: 'TEXT' },
+      { name: 'cityCode', type: 'e.g. AMM0086' },
+      { name: 'countryCurrency', type: 'e.g. JOD' },
+      { name: 'countryTradeCode', type: 'TEXT' },
+      { name: 'cityCodeNET', type: 'TEXT' },
+      { label: '4,449 rows' },
+    ]
+  },
+  {
+    id: 'sheet_currencies', model: 'currencyCodes', dbName: 'Google Sheets', theme: 'sheets',
+    x: 40, y: 830,
+    sections: [
+      { name: 'code', type: 'VARCHAR(3)' },
+      { name: 'currency', type: 'TEXT' },
+      { name: 'description', type: 'TEXT' },
+      { label: '22 rows' },
+    ]
+  },
+  {
+    id: 'sheet_carrier', model: 'carrierConfig', dbName: 'Google Sheets (Phase 3)', theme: 'sheets',
+    x: 340, y: 830,
+    sections: [
+      { name: 'carrierCode', type: 'naqel | smsa | ...' },
+      { name: 'carrierName', type: 'e.g. Naqel Express' },
+      { name: 'declaredValueMultiplier', type: 'e.g. 0.85' },
+      { label: 'COD customs value = total x multiplier' },
+    ]
+  },
+
+  // ══════════════════════════════════════════════════
+  // External APIs
+  // ══════════════════════════════════════════════════
+  {
+    id: 'api_naqel', model: 'Naqel / GN Connect', dbName: 'dev.gnteq.app', theme: 'api',
+    x: 1180, y: 40,
+    sections: [
+      { label: 'Authentication' },
+      { name: 'POST /GetToken', type: 'JWT token' },
+      { label: 'Shipment Operations' },
+      { name: 'POST /Shipments', type: 'Create + AWB' },
+      { name: 'GET /Shipments/{awb}', type: 'Track' },
+      { label: 'Response' },
+      { name: 'airwaybill', type: 'STRING' },
+      { name: 'shipmentLabel', type: 'Base64 PDF' },
+      { name: 'status', type: 'Success | Failed' },
+    ]
+  },
+  {
+    id: 'api_exchange', model: 'open.er-api.com', dbName: 'Free Currency API', theme: 'api',
+    x: 1180, y: 350,
+    sections: [
+      { name: 'GET /v6/latest/{base}', type: 'All rates' },
+      { label: 'Used for' },
+      { name: 'USD -> JOD, SAR, OMR...', type: 'Customs value' },
+      { label: 'Cache: 1-hour in-memory' },
+    ]
+  },
+  {
+    id: 'api_gemini', model: 'Gemini API', dbName: 'Google AI', theme: 'api',
+    x: 1180, y: 560,
+    sections: [
+      { label: '3 Translation Modes' },
+      { name: 'transliterate', type: 'Names (phonetic)' },
+      { name: 'translate_address', type: 'Addresses' },
+      { name: 'generic_translate', type: 'Other fields' },
+      { label: 'City Matching' },
+      { name: 'matchArabicCity', type: 'Arabic -> Naqel' },
+    ]
   },
 ];
 
-// Define relationships: [fromTable, fromField, toTable, toField, label]
+// Define relationships
 const relationships = [
-  { from: 'user_roles', fromField: 'userId', to: 'users', toField: 'id', type: 'many-to-one' },
-  { from: 'user_roles', fromField: 'roleId', to: 'roles', toField: 'id', type: 'many-to-one' },
-  { from: 'stores', fromField: 'defaultCountryId', to: 'countries', toField: 'id', type: 'many-to-one' },
-  { from: 'stores', fromField: 'defaultCredentialId', to: 'shipping_credentials', toField: 'id', type: 'many-to-one' },
-  { from: 'customers', fromField: 'storeId', to: 'stores', toField: 'id', type: 'many-to-one' },
-  { from: 'customers', fromField: 'countryId', to: 'countries', toField: 'id', type: 'many-to-one' },
-  { from: 'orders', fromField: 'storeId', to: 'stores', toField: 'id', type: 'many-to-one' },
-  { from: 'orders', fromField: 'customerId', to: 'customers', toField: 'id', type: 'many-to-one' },
-  { from: 'order_items', fromField: 'orderId', to: 'orders', toField: 'id', type: 'many-to-one' },
-  { from: 'shipping_credentials', fromField: 'countryId', to: 'countries', toField: 'id', type: 'many-to-one' },
-  { from: 'shipments', fromField: 'orderId', to: 'orders', toField: 'id', type: 'many-to-one' },
-  { from: 'shipments', fromField: 'credentialId', to: 'shipping_credentials', toField: 'id', type: 'many-to-one' },
-  { from: 'shipment_items', fromField: 'shipmentId', to: 'shipments', toField: 'id', type: 'many-to-one' },
-  { from: 'shipment_items', fromField: 'orderItemId', to: 'order_items', toField: 'id', type: 'many-to-one' },
-  { from: 'labels', fromField: 'shipmentId', to: 'shipments', toField: 'id', type: 'many-to-one' },
-  { from: 'api_logs', fromField: 'credentialId', to: 'shipping_credentials', toField: 'id', type: 'many-to-one' },
-  { from: 'api_logs', fromField: 'shipmentId', to: 'shipments', toField: 'id', type: 'many-to-one' },
+  { from: 'shipment_items', fromField: 'shipment_id', to: 'shipments', toField: 'id', type: 'many-to-one' },
+  { from: 'shipments', fromField: 'woo_order_id', to: 'woo_orders', toField: 'id', type: 'many-to-one' },
+  { from: 'shipments', fromField: 'carrier_code', to: 'api_naqel', toField: 'POST /Shipments', type: 'many-to-one', dashed: true },
+  { from: 'woo_orders', fromField: 'shipping.country', to: 'sheet_exit', toField: 'destinationCountry', type: 'many-to-one', dashed: true },
+  { from: 'woo_orders', fromField: 'shipping.city', to: 'sheet_cities', toField: 'cityEN', type: 'many-to-one', dashed: true },
+  { from: 'sheet_carrier', fromField: 'carrierCode', to: 'shipments', toField: 'carrier_code', type: 'many-to-one', dashed: true },
 ];
 
 const themeColors = {
-  auth: '#7c3aed',
-  shared: '#0891b2',
-  crm: '#2563eb',
   shipping: '#059669',
-  logging: '#d97706',
+  cache: '#d97706',
+  external: '#7c3aed',
+  sheets: '#0891b2',
+  api: '#dc2626',
 };
 
 // Render tables
@@ -540,9 +462,15 @@ tables.forEach(table => {
   </div>
   <div class="table-body">`;
 
-  table.fields.forEach(f => {
-    const icon = f.pk ? '<span class="field-icon pk">🔑</span>' :
-                 f.fk ? '<span class="field-icon fk">🔗</span>' :
+  (table.sections || []).forEach(f => {
+    if (f.label) {
+      html += `<div class="section-label">${f.label}</div>`;
+      return;
+    }
+    const icon = f.pk ? '<span class="field-icon pk">&#x1F511;</span>' :
+                 f.fk ? '<span class="field-icon fk">&#x1F517;</span>' :
+                 f.idx ? '<span class="field-icon idx">&#x21C5;</span>' :
+                 f.unique ? '<span class="field-icon" style="color:#818cf8">&#x26A1;</span>' :
                  '<span class="field-icon"></span>';
     const nameClass = f.pk ? 'field-name pk' : f.fk ? 'field-name fk' : 'field-name';
     const nullable = f.nullable ? '<span class="field-nullable">?</span>' : '';
@@ -555,18 +483,6 @@ tables.forEach(table => {
   });
 
   html += '</div>';
-
-  if (table.uniques || table.indexes) {
-    html += '<div class="table-footer">';
-    if (table.uniques) {
-      table.uniques.forEach(u => { html += `<span class="unique-badge">⚡ ${u}</span> `; });
-    }
-    if (table.indexes) {
-      table.indexes.forEach(i => { html += `<span class="index-badge">↕ ${i}</span> `; });
-    }
-    html += '</div>';
-  }
-
   card.innerHTML = html;
   diagram.appendChild(card);
   tableElements[table.id] = card;
@@ -575,14 +491,18 @@ tables.forEach(table => {
 // Draw relationship lines
 function getFieldPosition(tableId, fieldName, side) {
   const card = tableElements[tableId];
+  if (!card) return { x: 0, y: 0 };
   const rect = card.getBoundingClientRect();
   const diagramRect = diagram.getBoundingClientRect();
   const fieldRow = card.querySelector(`[data-field="${fieldName}"]`);
 
-  if (!fieldRow) return { x: 0, y: 0 };
-
-  const fieldRect = fieldRow.getBoundingClientRect();
-  const y = fieldRect.top - diagramRect.top + fieldRect.height / 2;
+  let y;
+  if (fieldRow) {
+    const fieldRect = fieldRow.getBoundingClientRect();
+    y = fieldRect.top - diagramRect.top + fieldRect.height / 2;
+  } else {
+    y = rect.top - diagramRect.top + rect.height / 2;
+  }
 
   if (side === 'left') {
     return { x: rect.left - diagramRect.left, y };
@@ -595,39 +515,30 @@ function drawLines() {
   const svg = document.getElementById('lines');
   svg.innerHTML = '';
 
-  // Add arrow marker defs
   const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
 
-  // One marker
   const markerOne = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
   markerOne.setAttribute('id', 'arrow-one');
   markerOne.setAttribute('viewBox', '0 0 10 10');
-  markerOne.setAttribute('refX', '8');
-  markerOne.setAttribute('refY', '5');
-  markerOne.setAttribute('markerWidth', '8');
-  markerOne.setAttribute('markerHeight', '8');
+  markerOne.setAttribute('refX', '8'); markerOne.setAttribute('refY', '5');
+  markerOne.setAttribute('markerWidth', '8'); markerOne.setAttribute('markerHeight', '8');
   markerOne.setAttribute('orient', 'auto');
   const pathOne = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   pathOne.setAttribute('d', 'M 0 1 L 8 5 L 0 9');
-  pathOne.setAttribute('fill', 'none');
-  pathOne.setAttribute('stroke', '#475569');
+  pathOne.setAttribute('fill', 'none'); pathOne.setAttribute('stroke', '#475569');
   pathOne.setAttribute('stroke-width', '1.5');
   markerOne.appendChild(pathOne);
   defs.appendChild(markerOne);
 
-  // Many marker (crow's foot)
   const markerMany = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
   markerMany.setAttribute('id', 'arrow-many');
   markerMany.setAttribute('viewBox', '0 0 12 12');
-  markerMany.setAttribute('refX', '0');
-  markerMany.setAttribute('refY', '6');
-  markerMany.setAttribute('markerWidth', '10');
-  markerMany.setAttribute('markerHeight', '10');
+  markerMany.setAttribute('refX', '0'); markerMany.setAttribute('refY', '6');
+  markerMany.setAttribute('markerWidth', '10'); markerMany.setAttribute('markerHeight', '10');
   markerMany.setAttribute('orient', 'auto');
   const pathMany = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   pathMany.setAttribute('d', 'M 10 1 L 0 6 L 10 11');
-  pathMany.setAttribute('fill', 'none');
-  pathMany.setAttribute('stroke', '#475569');
+  pathMany.setAttribute('fill', 'none'); pathMany.setAttribute('stroke', '#475569');
   pathMany.setAttribute('stroke-width', '1.5');
   markerMany.appendChild(pathMany);
   defs.appendChild(markerMany);
@@ -646,58 +557,26 @@ function drawLines() {
     const fromCenterX = fromRect.left - diagramRect.left + fromRect.width / 2;
     const toCenterX = toRect.left - diagramRect.left + toRect.width / 2;
 
-    let fromSide, toSide;
-    if (fromCenterX < toCenterX) {
-      fromSide = 'right';
-      toSide = 'left';
-    } else {
-      fromSide = 'left';
-      toSide = 'right';
-    }
+    let fromSide = fromCenterX < toCenterX ? 'right' : 'left';
+    let toSide = fromCenterX < toCenterX ? 'left' : 'right';
 
     const from = getFieldPosition(rel.from, rel.fromField, fromSide);
     const to = getFieldPosition(rel.to, rel.toField, toSide);
 
-    // Bezier curve
     const dx = Math.abs(to.x - from.x);
     const controlOffset = Math.max(40, dx * 0.4);
-
     const cx1 = fromSide === 'right' ? from.x + controlOffset : from.x - controlOffset;
     const cx2 = toSide === 'right' ? to.x + controlOffset : to.x - controlOffset;
 
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', `M ${from.x} ${from.y} C ${cx1} ${from.y}, ${cx2} ${to.y}, ${to.x} ${to.y}`);
     path.setAttribute('fill', 'none');
-    path.setAttribute('stroke', '#334155');
+    path.setAttribute('stroke', rel.dashed ? '#475569' : '#334155');
     path.setAttribute('stroke-width', '1.5');
-    path.setAttribute('stroke-dasharray', rel.type === 'many-to-one' ? 'none' : '4,4');
+    if (rel.dashed) path.setAttribute('stroke-dasharray', '6,4');
     path.setAttribute('marker-start', 'url(#arrow-many)');
     path.setAttribute('marker-end', 'url(#arrow-one)');
-
     svg.appendChild(path);
-
-    // Cardinality labels
-    const labelFrom = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    const lfx = fromSide === 'right' ? from.x + 14 : from.x - 14;
-    labelFrom.setAttribute('x', lfx);
-    labelFrom.setAttribute('y', from.y - 8);
-    labelFrom.setAttribute('fill', '#64748b');
-    labelFrom.setAttribute('font-size', '10');
-    labelFrom.setAttribute('font-family', 'sans-serif');
-    labelFrom.setAttribute('text-anchor', 'middle');
-    labelFrom.textContent = '*';
-    svg.appendChild(labelFrom);
-
-    const labelTo = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    const ltx = toSide === 'right' ? to.x + 14 : to.x - 14;
-    labelTo.setAttribute('x', ltx);
-    labelTo.setAttribute('y', to.y - 8);
-    labelTo.setAttribute('fill', '#64748b');
-    labelTo.setAttribute('font-size', '10');
-    labelTo.setAttribute('font-family', 'sans-serif');
-    labelTo.setAttribute('text-anchor', 'middle');
-    labelTo.textContent = '1';
-    svg.appendChild(labelTo);
   });
 }
 
@@ -719,7 +598,6 @@ document.addEventListener('mousedown', (e) => {
 
 document.addEventListener('mousemove', (e) => {
   if (!dragTarget) return;
-  const diagramRect = diagram.getBoundingClientRect();
   const x = e.clientX - dragOffset.x;
   const y = e.clientY - dragOffset.y;
   dragTarget.style.left = Math.max(0, x) + 'px';
@@ -748,14 +626,11 @@ function zoomIn() { zoomLevel = Math.min(2, zoomLevel + 0.1); applyZoom(); }
 function zoomOut() { zoomLevel = Math.max(0.3, zoomLevel - 0.1); applyZoom(); }
 function zoomReset() { zoomLevel = 1; applyZoom(); }
 
-// Mouse wheel zoom
 document.getElementById('canvas').addEventListener('wheel', (e) => {
   e.preventDefault();
-  if (e.deltaY < 0) zoomIn();
-  else zoomOut();
+  if (e.deltaY < 0) zoomIn(); else zoomOut();
 }, { passive: false });
 
-// Initial draw
 setTimeout(drawLines, 100);
 window.addEventListener('resize', drawLines);
 </script>

@@ -43,6 +43,7 @@ import {
   Save,
   Download,
   Check,
+  AlertTriangle,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────
@@ -177,6 +178,12 @@ function getMetaValue(meta: WooMeta[] | undefined, key: string): string {
   return meta.find((m) => m.key === key)?.value || "";
 }
 
+function isRouteValid(order: WooOrder, validDests: Set<string>): boolean {
+  const destCountry = (order.shipping.country || order.billing.country || "").toUpperCase();
+  if (!destCountry) return false;
+  return validDests.has(destCountry);
+}
+
 // ── Editable Address Component ─────────────────────────────────
 
 function AddressEditor({
@@ -286,6 +293,14 @@ export default function OrdersPage() {
   const [matchingCity, setMatchingCity] = useState(false);
   const [manualCityCode, setManualCityCode] = useState("");
 
+  // Route validation state
+  const [validDestinations, setValidDestinations] = useState<Set<string>>(new Set());
+  const [exitDataLoaded, setExitDataLoaded] = useState(false);
+  const [routeFilter, setRouteFilter] = useState<"all" | "valid" | "invalid">("all");
+
+  // Country → currency map (from naqelCityCodes)
+  const [countryCurrencyMap, setCountryCurrencyMap] = useState<Record<string, string>>({});
+
   // Track original for diff
   const originalOrderRef = useRef<WooOrder | null>(null);
 
@@ -365,6 +380,40 @@ export default function OrdersPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
+
+  // Fetch reference data: exit locations + country currencies
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/reference/sheets");
+        const json = await res.json();
+        if (json.exitLocations) {
+          const validDests = new Set<string>();
+          for (const row of json.exitLocations) {
+            if ((row.exitCountry || "").toUpperCase() === "TR") {
+              validDests.add((row.destinationCountry || "").toUpperCase());
+            }
+          }
+          setValidDestinations(validDests);
+          setExitDataLoaded(true);
+        }
+        // Build country → currency map from naqelCityCodes
+        if (json.naqelCityCodes) {
+          const ccMap: Record<string, string> = {};
+          for (const row of json.naqelCityCodes) {
+            const cc = (row.countryCode || "").toUpperCase();
+            const cur = (row.countryCurrency || "").toUpperCase();
+            if (cc && cur && !ccMap[cc]) {
+              ccMap[cc] = cur;
+            }
+          }
+          setCountryCurrencyMap(ccMap);
+        }
+      } catch {
+        // Silent fail — route validation is non-blocking
+      }
+    })();
+  }, []);
 
   // ── Open detail dialog ───────────────────────────────────
 
@@ -574,8 +623,9 @@ export default function OrdersPage() {
 
     setCreating(true);
     try {
-      // Determine target currency from city match
-      const targetCurrency = cityMatch?.matchedCity?.countryCurrency;
+      // Determine target currency: country→currency map (reliable), fallback to city match
+      const destCountry = (editedShipping?.country || detailOrder.shipping.country || detailOrder.billing.country || "").toUpperCase();
+      const targetCurrency = countryCurrencyMap[destCountry] || cityMatch?.matchedCity?.countryCurrency;
       let convertedTotal: number | undefined;
       let convertedCurrency: string | undefined;
 
@@ -668,7 +718,7 @@ export default function OrdersPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger className="w-[200px]">
             <SelectValue placeholder="Status" />
@@ -682,6 +732,37 @@ export default function OrdersPage() {
             ))}
           </SelectContent>
         </Select>
+        {exitDataLoaded && (
+          <div className="flex items-center gap-1">
+            <Button
+              variant={routeFilter === "all" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setRouteFilter("all")}
+            >
+              All Routes
+            </Button>
+            <Button
+              variant={routeFilter === "invalid" ? "destructive" : "outline"}
+              size="sm"
+              onClick={() => setRouteFilter("invalid")}
+            >
+              <AlertTriangle className="size-3.5 mr-1" />
+              Route Issues
+              {orders.filter((o) => !isRouteValid(o, validDestinations)).length > 0 && (
+                <Badge variant="destructive" className="ml-1 text-[10px] px-1">
+                  {orders.filter((o) => !isRouteValid(o, validDestinations)).length}
+                </Badge>
+              )}
+            </Button>
+            <Button
+              variant={routeFilter === "valid" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setRouteFilter("valid")}
+            >
+              Valid Routes
+            </Button>
+          </div>
+        )}
         <Badge variant="outline" className="text-xs">
           Page {page}/{totalPages}
         </Badge>
@@ -730,28 +811,45 @@ export default function OrdersPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {orders.map((order) => {
+                {(exitDataLoaded && routeFilter !== "all"
+                  ? orders.filter((o) => {
+                      const valid = isRouteValid(o, validDestinations);
+                      return routeFilter === "valid" ? valid : !valid;
+                    })
+                  : orders
+                ).map((order) => {
                   const shipmentStatus = orderShipmentMap[order.id];
                   const hasShipment = !!shipmentStatus;
                   const carrier = getCarrierFromMeta(order.meta_data);
                   const cityCode = getMetaValue(order.meta_data, "bzrc_city_code");
                   const isReady = !!carrier && !!cityCode;
+                  const routeValid = !exitDataLoaded || isRouteValid(order, validDestinations);
                   return (
                   <TableRow
                     key={order.id}
-                    className={`cursor-pointer hover:bg-muted/50 ${hasShipment ? "bg-blue-50" : isReady ? "bg-green-50/50" : ""}`}
+                    className={`cursor-pointer hover:bg-muted/50 ${
+                      !routeValid ? "bg-red-50/50" :
+                      hasShipment ? "bg-blue-50" :
+                      isReady ? "bg-green-50/50" : ""
+                    }`}
                     onClick={() => openDetail(order)}
                   >
                     <TableCell className="font-medium">
                       <div className="flex items-center gap-1.5">
                         {order.number}
+                        {!routeValid && exitDataLoaded && (
+                          <span className="inline-flex items-center rounded-full bg-red-100 text-red-700 px-1.5 py-0.5 text-[10px] font-medium">
+                            <AlertTriangle className="size-2.5 mr-0.5" />
+                            Invalid Route
+                          </span>
+                        )}
                         {hasShipment && (
                           <span className="inline-flex items-center rounded-full bg-blue-100 text-blue-700 px-1.5 py-0.5 text-[10px] font-medium">
                             <Check className="size-2.5 mr-0.5" />
                             {shipmentStatus}
                           </span>
                         )}
-                        {!hasShipment && isReady && (
+                        {!hasShipment && isReady && routeValid && (
                           <span className="inline-flex items-center rounded-full bg-green-100 text-green-700 px-1.5 py-0.5 text-[10px] font-medium">
                             {carrier}/{cityCode}
                           </span>
@@ -862,11 +960,16 @@ export default function OrdersPage() {
               <TabsContent value="shipping" className="space-y-4 mt-4">
                 <AddressEditor
                   address={editedShipping}
-                  onChange={(field, value) =>
+                  onChange={(field, value) => {
                     setEditedShipping((prev) =>
                       prev ? { ...prev, [field]: value } : prev
-                    )
-                  }
+                    );
+                    // Invalidate city match when city or country changes
+                    if (field === "city" || field === "country") {
+                      setCityMatch(null);
+                      setManualCityCode("");
+                    }
+                  }}
                   prefix="Shipping Address"
                   onTranslate={(fields) => handleTranslate(fields, "shipping")}
                   translating={translating}
@@ -1083,9 +1186,14 @@ export default function OrdersPage() {
                     </div>
                     <div className="text-muted-foreground">City Code</div>
                     <div>
-                      {manualCityCode || cityMatch?.matchedCity?.cityCode || (
-                        <span className="text-orange-600">Not matched yet</span>
-                      )}
+                      {manualCityCode
+                        ? manualCityCode
+                        : cityMatch?.matchedCity && cityMatch.confidence !== "none"
+                          ? cityMatch.matchedCity.cityCode
+                          : cityMatch?.confidence === "none"
+                            ? <span className="text-red-600">Low confidence ({Math.round((cityMatch.score || 0) * 100)}%)</span>
+                            : <span className="text-orange-600">Not matched yet</span>
+                      }
                     </div>
                     <div className="text-muted-foreground">Carrier</div>
                     <div className="font-medium capitalize">
@@ -1097,15 +1205,21 @@ export default function OrdersPage() {
                     <div className="font-medium">
                       {detailOrder.total} {detailOrder.currency}
                     </div>
-                    {cityMatch?.matchedCity?.countryCurrency &&
-                      cityMatch.matchedCity.countryCurrency !== detailOrder.currency && (
-                      <>
-                        <div className="text-muted-foreground">Customs Currency</div>
-                        <div className="font-medium text-blue-600">
-                          {cityMatch.matchedCity.countryCurrency} (will be converted from {detailOrder.currency})
-                        </div>
-                      </>
-                    )}
+                    {(() => {
+                      const destCC = (editedShipping?.country || detailOrder.shipping.country || detailOrder.billing.country || "").toUpperCase();
+                      const destCur = countryCurrencyMap[destCC] || cityMatch?.matchedCity?.countryCurrency;
+                      if (destCur && destCur !== detailOrder.currency) {
+                        return (
+                          <>
+                            <div className="text-muted-foreground">Customs Currency</div>
+                            <div className="font-medium text-blue-600">
+                              {destCur} (will be converted from {detailOrder.currency})
+                            </div>
+                          </>
+                        );
+                      }
+                      return null;
+                    })()}
                     {detailOrder.payment_method === "cod" && (
                       <>
                         <div className="text-muted-foreground">COD</div>
@@ -1118,16 +1232,35 @@ export default function OrdersPage() {
                 </div>
 
                 {/* Validation warnings */}
-                {(!selectedCarrier || (!cityMatch?.matchedCity && !manualCityCode)) && (
-                  <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 space-y-1">
-                    {!selectedCarrier && (
-                      <div>&#x2716; Carrier is not selected</div>
-                    )}
-                    {!cityMatch?.matchedCity && !manualCityCode && (
-                      <div>&#x2716; City code is not matched — run city match or enter manually</div>
-                    )}
-                  </div>
-                )}
+                {(() => {
+                  const hasCityCode = !!manualCityCode || (cityMatch?.matchedCity && cityMatch.confidence !== "none");
+                  const hasLowConfidence = cityMatch?.confidence === "none" && !manualCityCode;
+                  const hasRouteIssue = exitDataLoaded && detailOrder && !isRouteValid(detailOrder, validDestinations);
+                  const hasIssue = !selectedCarrier || !hasCityCode || hasRouteIssue;
+                  if (!hasIssue) return null;
+                  return (
+                    <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 space-y-1">
+                      {hasRouteIssue && (
+                        <div>
+                          <AlertTriangle className="size-3.5 inline mr-1" />
+                          Route TR &rarr; {(detailOrder!.shipping.country || detailOrder!.billing.country || "??").toUpperCase()} is not configured in exitLocation sheet
+                        </div>
+                      )}
+                      {!selectedCarrier && (
+                        <div>&#x2716; Carrier is not selected</div>
+                      )}
+                      {hasLowConfidence && cityMatch?.matchedCity && (
+                        <div>
+                          <AlertTriangle className="size-3.5 inline mr-1" />
+                          City match confidence too low ({Math.round((cityMatch.score || 0) * 100)}%) — select from alternatives or enter city code manually
+                        </div>
+                      )}
+                      {!cityMatch?.matchedCity && !manualCityCode && (
+                        <div>&#x2716; City code is not matched — run city match or enter manually</div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Existing shipment warning */}
                 {detailOrder && orderShipmentMap[detailOrder.id] && (
@@ -1152,7 +1285,12 @@ export default function OrdersPage() {
                 <Button
                   className="w-full"
                   onClick={handleCreateShipment}
-                  disabled={creating || !selectedCarrier || (!cityMatch?.matchedCity && !manualCityCode)}
+                  disabled={
+                    creating ||
+                    !selectedCarrier ||
+                    (!manualCityCode && (!cityMatch?.matchedCity || cityMatch.confidence === "none")) ||
+                    (exitDataLoaded && !!detailOrder && !isRouteValid(detailOrder, validDestinations))
+                  }
                 >
                   <Truck className="size-4" />
                   {creating ? "Creating..." : "Create Shipment"}

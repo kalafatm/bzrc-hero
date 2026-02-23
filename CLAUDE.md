@@ -26,7 +26,7 @@ src/
 ├── app/
 │   ├── (dashboard)/
 │   │   ├── page.tsx              # Dashboard (shipment stats)
-│   │   ├── orders/page.tsx       # WC orders (editable, translate, city match)
+│   │   ├── orders/page.tsx       # WC orders (editable, translate, city match, route validation)
 │   │   └── shipments/page.tsx    # Shipment list (submit to Naqel, labels)
 │   └── api/
 │       ├── woo/orders/           # GET (list), [id] GET/PUT
@@ -34,7 +34,7 @@ src/
 │       ├── translate/            # POST — Gemini translation
 │       ├── city-match/           # POST — fuzzy city code matching
 │       ├── exchange-rates/       # GET — open.er-api.com currency conversion
-│       └── reference/sheets/     # GET — Google Sheets data
+│       └── reference/sheets/     # GET — Google Sheets data (exit, cities, currencies, carrierConfig)
 ├── components/
 │   ├── layout/
 │   │   ├── sidebar.tsx           # Navigation sidebar
@@ -43,18 +43,19 @@ src/
 ├── lib/api/
 │   ├── woo-client.ts             # WooCommerce REST API client
 │   ├── woo-types.ts              # WC type definitions
-│   ├── woo-to-shipment.ts        # WC order → shipment payload mapper
+│   ├── woo-to-shipment.ts        # WC order → shipment payload mapper (with COD multiplier)
 │   ├── shipping-client.ts        # Remote shipping API client
 │   ├── shipping-types.ts         # Shipment type definitions
 │   ├── gemini.ts                 # Gemini API (transliterate + translate + city match)
 │   ├── city-matcher.ts           # 4-step city code fuzzy matching pipeline
-│   └── google-sheets.ts          # Google Sheets API (raw fetch + JWT, zero deps)
+│   └── google-sheets.ts          # Google Sheets API (raw fetch + JWT, zero deps, 4 sheets)
 server/
 └── main.py                       # FastAPI backend (shipment CRUD + Naqel submit)
 credentials/
 └── google-service-account.json   # GCP service account key (gitignored)
 docs/
-└── architecture.html             # Visual ERD + architecture documentation
+├── architecture.html             # Visual architecture documentation
+└── erd.html                      # Interactive ERD diagram (v3.0)
 ```
 
 ## Environment Variables (.env)
@@ -88,13 +89,13 @@ GOOGLE_SHEET_ID=109aKj27J8Bo8KpPf1wt_wcbFDcXjYCrHT0vDIDEr3l4
 | GET | `/api/woo/orders/[id]` | Get single WC order |
 | PUT | `/api/woo/orders/[id]` | Update WC order (shipping, billing, note) |
 | GET | `/api/shipments` | List shipments from remote API |
-| POST | `/api/shipments` | Create shipment from WC order |
+| POST | `/api/shipments` | Create shipment (with route + carrier config validation) |
 | POST | `/api/shipments/[id]/submit` | Submit shipment to Naqel |
 | GET | `/api/shipments/[id]/label` | Download shipping label PDF |
 | POST | `/api/translate` | Translate/transliterate text via Gemini |
 | POST | `/api/city-match` | Fuzzy match city to Naqel code |
 | GET | `/api/exchange-rates` | Get/convert exchange rates (open.er-api.com) |
-| GET | `/api/reference/sheets` | Google Sheets reference data |
+| GET | `/api/reference/sheets` | Google Sheets reference data (4 sheets + carrierConfigs) |
 
 ## FastAPI Backend Endpoints (server/main.py)
 
@@ -113,21 +114,40 @@ GOOGLE_SHEET_ID=109aKj27J8Bo8KpPf1wt_wcbFDcXjYCrHT0vDIDEr3l4
 - **Service Account:** `indexer-bot@alpine-guild-481512-t7.iam.gserviceaccount.com`
 - **Cache:** 6-hour TTL (in-memory), token cached 1 hour
 - **Sheets:**
-  - `exitLocation` — Exit Country, Exit Location Code, Destination Country
+  - `exitLocation` — Exit Country, Exit Location Code, Destination Countries (split by "/" in code)
   - `naqelCityCodes` — Country Code, Country Name, Province, City [EN], City [AR], City Code, Country Currency, Country Trade Code, City Code NET
   - `currencyCodes` — Code, Currency, Currency Description
+  - `carrierConfig` — Carrier Code, Carrier Name, Declared Value Multiplier (Phase 3)
+- **Country name resolution:** exitLocation sheet uses names (Turkiye, UAE-FF) → resolved to ISO2 (TR, AE) in code
+
+## Exit Location Route Validation (Phase 3)
+- **Server-side:** POST `/api/shipments` returns 422 if TR → destination not in exitLocation sheet
+- **Client-side (orders page):**
+  - Red "Invalid Route" badge on order rows with invalid destination
+  - "Route Issues" filter tab showing count of affected orders
+  - Detail dialog: red warning banner, Create Shipment button disabled
+  - Valid destinations built from exitLocation sheet on page mount
+
+## COD Declared Value (Phase 3)
+- Carrier-specific multiplier from `carrierConfig` Google Sheet (e.g., naqel=0.85, smsa=1.0)
+- Applied to `customs_declared_value` and per-item `customs_value` for COD orders only
+- **NOT** applied to `cod_amount` (real amount customer pays on delivery)
+- Lookup: `getCarrierConfig(carrierCode)` → `declaredValueMultiplier`
 
 ## City Matching Pipeline
 1. **Exact match** — country code + city name (case-insensitive)
-2. **Fuzzy match** — Levenshtein distance against English city names
+2. **Fuzzy match** — Levenshtein distance >= 70% against English city names
 3. **Gemini Arabic fallback** — if Arabic characters detected, ask Gemini
 4. **Operator confirmation** — fuzzy/gemini matches require manual confirm
 5. **Manual entry** — operator can always type a city code directly
+- **Confidence "none" (< 70%) blocks shipment creation** — user must select alternative or enter manually
+- **City/country field edits invalidate** existing city match and manual code (forces re-match)
 
 ## Currency Conversion (open.er-api.com)
 - Source: `https://open.er-api.com/v6/latest/{base}` (free, no API key)
 - All WC orders arrive in USD
-- Convert to destination currency (determined from naqelCityCodes sheet)
+- Convert to destination currency (determined from countryCurrencyMap, built from naqelCityCodes)
+- **Currency lookup by country code** (not dependent on city match) — works even with saved city code
 - Caching: in-memory Map with 1-hour TTL (Next.js API route)
 - Runs entirely in frontend — no FastAPI backend involvement
 
@@ -171,7 +191,9 @@ npm run build        # Production build
 ## Rules
 - All UI text in English only
 - No local database — all data from WC API or remote shipping API
+- No bulk shipment creation — all shipments go through detail dialog (carrier/city/translation review)
 - PowerShell: use `;` not `&&` to chain commands
 - shadcn CLI: `npx shadcn@latest add <component> -y`
 - API routes return `NextResponse.json()`
 - Don't push to GitHub/server until features are complete locally
+- NEVER default carrier to "naqel" — show actual WC meta value or empty with error

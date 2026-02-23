@@ -25,6 +25,7 @@ interface MapOptions {
   cityCode?: string;
   countryCurrency?: string;
   convertedTotal?: number;
+  declaredValueMultiplier?: number; // carrier-specific multiplier for customs declared value (COD)
   shipper?: {
     person_name: string;
     company_name?: string;
@@ -63,6 +64,9 @@ export function mapWooOrderToShipment(
       ? options.convertedTotal / orderTotal
       : 1;
 
+  // Declared value multiplier (carrier-specific, only for COD orders)
+  const dvMultiplier = options?.declaredValueMultiplier ?? 1;
+
   // Build items from line_items
   const items: ShipmentItemCreate[] = order.line_items.map((li) => {
     const itemValue = Number(li.total) || li.price * li.quantity;
@@ -70,7 +74,7 @@ export function mapWooOrderToShipment(
       quantity: li.quantity,
       weight_value: 0.5, // default 0.5 kg per item (no weight info from WC)
       weight_unit: 1,
-      customs_value: Math.round(itemValue * conversionRatio * 100) / 100,
+      customs_value: Math.round(itemValue * conversionRatio * dvMultiplier * 100) / 100,
       customs_currency: customsCurrency,
       goods_description: li.name.substring(0, 100),
       commodity_code: li.sku || undefined,
@@ -95,11 +99,11 @@ export function mapWooOrderToShipment(
     ? Math.round(orderTotal * conversionRatio * 100) / 100
     : undefined;
 
-  // Customs declared value (total, in destination currency)
+  // Customs declared value (total, in destination currency, with carrier multiplier)
   const customsDeclaredValue =
     options?.convertedTotal != null
-      ? Math.round(options.convertedTotal * 100) / 100
-      : orderTotal;
+      ? Math.round(options.convertedTotal * dvMultiplier * 100) / 100
+      : Math.round(orderTotal * dvMultiplier * 100) / 100;
 
   const shipper = options?.shipper || DEFAULT_SHIPPER;
 

@@ -1,7 +1,7 @@
 /**
  * Google Sheets API client for reference data.
  * Uses raw fetch + JWT auth — zero heavy dependencies.
- * Fetches 3 sheets: exitLocation, naqelCityCodes, currencyCodes
+ * Fetches 4 sheets: exitLocation, naqelCityCodes, currencyCodes, carrierConfig
  * In-memory cache with 6-hour refresh.
  */
 
@@ -27,10 +27,17 @@ export interface CurrencyCodeRow {
   description: string;
 }
 
+export interface CarrierConfigRow {
+  carrierCode: string;        // e.g. "naqel", "smsa" (lowercase)
+  carrierName: string;        // e.g. "Naqel Express"
+  declaredValueMultiplier: number; // e.g. 0.80, 1.0
+}
+
 export interface SheetData {
   exitLocations: ExitLocationRow[];
   naqelCityCodes: NaqelCityRow[];
   currencyCodes: CurrencyCodeRow[];
+  carrierConfigs: CarrierConfigRow[];
   fetchedAt: string;
 }
 
@@ -129,13 +136,44 @@ async function fetchSheet(sheetName: string): Promise<string[][]> {
   return data.values || [];
 }
 
+// Common country name → ISO code mapping for exitLocation sheet
+const COUNTRY_NAME_TO_ISO: Record<string, string> = {
+  turkiye: "TR", turkey: "TR",
+  jordan: "JO",
+  kuwait: "KW",
+  bahrain: "BH",
+  oman: "OM",
+  qatar: "QA",
+  uae: "AE", "united arab emirates": "AE",
+  sa: "SA", "saudi arabia": "SA",
+  iraq: "IQ",
+  lebanon: "LB",
+};
+
+function resolveCountryCode(raw: string): string {
+  const trimmed = raw.trim();
+  // Strip suffix like "-FF", "-HNO" → "SA-FF" becomes "SA", "UAE-FF" becomes "UAE"
+  const base = trimmed.split("-")[0].trim();
+  // Check name mapping first (handles "Turkiye", "UAE" → "AE", etc.)
+  return COUNTRY_NAME_TO_ISO[base.toLowerCase()] || base.toUpperCase();
+}
+
 function parseExitLocations(rows: string[][]): ExitLocationRow[] {
-  // Skip header row
-  return rows.slice(1).map((row) => ({
-    exitCountry: (row[0] || "").trim(),
-    exitLocationCode: (row[1] || "").trim(),
-    destinationCountry: (row[2] || "").trim(),
-  })).filter((r) => r.exitCountry && r.exitLocationCode);
+  // Skip header row. Column C may contain multiple destinations: "SA / BH / AE"
+  const result: ExitLocationRow[] = [];
+  for (const row of rows.slice(1)) {
+    const exitCountry = resolveCountryCode(row[0] || "");
+    const exitLocationCode = (row[1] || "").trim();
+    const destRaw = (row[2] || "").trim();
+    if (!exitCountry || !exitLocationCode || !destRaw) continue;
+
+    // Split by "/" or "," to support "SA / BH / AE" format
+    const destinations = destRaw.split(/[\/,]/).map((d) => d.trim().toUpperCase()).filter(Boolean);
+    for (const dest of destinations) {
+      result.push({ exitCountry, exitLocationCode, destinationCountry: dest });
+    }
+  }
+  return result;
 }
 
 function parseNaqelCityCodes(rows: string[][]): NaqelCityRow[] {
@@ -163,6 +201,15 @@ function parseCurrencyCodes(rows: string[][]): CurrencyCodeRow[] {
   })).filter((r) => r.code);
 }
 
+function parseCarrierConfig(rows: string[][]): CarrierConfigRow[] {
+  // Header: Carrier Code, Carrier Name, Declared Value Multiplier
+  return rows.slice(1).map((row) => ({
+    carrierCode: (row[0] || "").trim().toLowerCase(),
+    carrierName: (row[1] || "").trim(),
+    declaredValueMultiplier: parseFloat(row[2] || "1") || 1,
+  })).filter((r) => r.carrierCode);
+}
+
 // ── Public API ─────────────────────────────────────────────────
 
 /**
@@ -176,16 +223,19 @@ export async function getSheetData(forceRefresh = false): Promise<SheetData> {
     return cachedData;
   }
 
-  const [exitRows, cityRows, currencyRows] = await Promise.all([
+  // Fetch carrierConfig with try-catch (tab may not exist yet)
+  const [exitRows, cityRows, currencyRows, carrierRows] = await Promise.all([
     fetchSheet("exitLocation"),
     fetchSheet("naqelCityCodes"),
     fetchSheet("currencyCodes"),
+    fetchSheet("carrierConfig").catch(() => [] as string[][]),
   ]);
 
   cachedData = {
     exitLocations: parseExitLocations(exitRows),
     naqelCityCodes: parseNaqelCityCodes(cityRows),
     currencyCodes: parseCurrencyCodes(currencyRows),
+    carrierConfigs: parseCarrierConfig(carrierRows),
     fetchedAt: new Date().toISOString(),
   };
   cacheTimestamp = now;
@@ -227,4 +277,18 @@ export async function getCountryCurrency(countryCode: string): Promise<string | 
     (r) => r.countryCode.toUpperCase() === countryCode.toUpperCase()
   );
   return row?.countryCurrency || null;
+}
+
+/**
+ * Look up carrier config by carrier code.
+ */
+export async function getCarrierConfig(
+  carrierCode: string
+): Promise<CarrierConfigRow | null> {
+  const data = await getSheetData();
+  return (
+    data.carrierConfigs.find(
+      (r) => r.carrierCode === carrierCode.toLowerCase()
+    ) || null
+  );
 }

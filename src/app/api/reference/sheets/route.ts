@@ -14,11 +14,13 @@ export async function GET(req: NextRequest) {
       exitLocations: data.exitLocations,
       naqelCityCodes: data.naqelCityCodes,
       currencyCodes: data.currencyCodes,
+      carrierConfigs: data.carrierConfigs,
       fetchedAt: data.fetchedAt,
       counts: {
         exitLocations: data.exitLocations.length,
         naqelCityCodes: data.naqelCityCodes.length,
         currencyCodes: data.currencyCodes.length,
+        carrierConfigs: data.carrierConfigs.length,
       },
     });
   } catch (err) {
