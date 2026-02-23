@@ -27,10 +27,10 @@ src/
 │   ├── (dashboard)/
 │   │   ├── page.tsx              # Dashboard (shipment stats)
 │   │   ├── orders/page.tsx       # WC orders (editable, translate, city match, route validation)
-│   │   └── shipments/page.tsx    # Shipment list (submit to Naqel, labels)
+│   │   └── shipments/page.tsx    # Shipment list (submit, track, labels, timeline)
 │   └── api/
 │       ├── woo/orders/           # GET (list), [id] GET/PUT
-│       ├── shipments/            # GET/POST, [id]/submit, [id]/label
+│       ├── shipments/            # GET/POST, [id]/submit, [id]/label, [id]/track, [id]/tracking-events, tracking-poll
 │       ├── translate/            # POST — Gemini translation
 │       ├── city-match/           # POST — fuzzy city code matching
 │       ├── exchange-rates/       # GET — open.er-api.com currency conversion
@@ -44,18 +44,20 @@ src/
 │   ├── woo-client.ts             # WooCommerce REST API client
 │   ├── woo-types.ts              # WC type definitions
 │   ├── woo-to-shipment.ts        # WC order → shipment payload mapper (with COD multiplier)
-│   ├── shipping-client.ts        # Remote shipping API client
-│   ├── shipping-types.ts         # Shipment type definitions
+│   ├── shipping-client.ts        # Remote shipping API client (CRUD + submit + track)
+│   ├── shipping-types.ts         # Shipment type definitions (+ TrackingEvent, TrackingResponse)
 │   ├── gemini.ts                 # Gemini API (transliterate + translate + city match)
 │   ├── city-matcher.ts           # 4-step city code fuzzy matching pipeline
 │   └── google-sheets.ts          # Google Sheets API (raw fetch + JWT, zero deps, 4 sheets)
 server/
-└── main.py                       # FastAPI backend (shipment CRUD + Naqel submit)
+└── main.py                       # FastAPI backend (shipment CRUD + Naqel submit + tracking)
 credentials/
 └── google-service-account.json   # GCP service account key (gitignored)
 docs/
-├── architecture.html             # Visual architecture documentation
-└── erd.html                      # Interactive ERD diagram (v3.0)
+├── architecture.html             # Visual architecture documentation (legacy)
+├── architecture_naqel.html       # Naqel module architecture (v3.0, Phases 1-4)
+├── architecture_smsa.html        # SMSA module architecture (plan)
+└── erd.html                      # Interactive ERD diagram (v4.0, draggable)
 ```
 
 ## Environment Variables (.env)
@@ -92,6 +94,9 @@ GOOGLE_SHEET_ID=109aKj27J8Bo8KpPf1wt_wcbFDcXjYCrHT0vDIDEr3l4
 | POST | `/api/shipments` | Create shipment (with route + carrier config validation) |
 | POST | `/api/shipments/[id]/submit` | Submit shipment to Naqel |
 | GET | `/api/shipments/[id]/label` | Download shipping label PDF |
+| POST | `/api/shipments/[id]/track` | Track shipment via GN Connect |
+| GET | `/api/shipments/[id]/tracking-events` | Get cached tracking events |
+| POST | `/api/shipments/tracking-poll` | Bulk poll all submitted/in_transit shipments |
 | POST | `/api/translate` | Translate/transliterate text via Gemini |
 | POST | `/api/city-match` | Fuzzy match city to Naqel code |
 | GET | `/api/exchange-rates` | Get/convert exchange rates (open.er-api.com) |
@@ -107,6 +112,11 @@ GOOGLE_SHEET_ID=109aKj27J8Bo8KpPf1wt_wcbFDcXjYCrHT0vDIDEr3l4
 | PATCH | `/shipments/{id}` | Update shipment |
 | POST | `/shipments/{id}/submit` | Submit to Naqel/GN Connect |
 | GET | `/shipments/{id}/label` | Download label PDF |
+| POST | `/shipments/{id}/track` | Track via GN Connect, store events, update status |
+| GET | `/shipments/{id}/tracking-events` | Read cached events (no external call) |
+| POST | `/shipments/tracking/poll` | Bulk poll all submitted/in_transit shipments |
+| GET | `/exchange-rates/` | All TCMB rates (cached 4h, DB fallback) |
+| GET | `/exchange-rates/convert` | Convert amount (?from=USD&to=SAR&amount=100) |
 
 ## Google Sheets Reference Data
 - **Implementation:** Raw `fetch()` + JWT auth using Node.js built-in `crypto` (zero npm deps)
@@ -165,14 +175,38 @@ GOOGLE_SHEET_ID=109aKj27J8Bo8KpPf1wt_wcbFDcXjYCrHT0vDIDEr3l4
 - Saved via PUT /api/woo/orders/[id], pre-populated on next dialog open
 - Green "ready" badge on order list when carrier + city code set
 
+## Phase 4: Shipment Tracking (Complete)
+- **Single track:** POST `/api/shipments/[id]/track` → GN Connect Tracking API → store events
+- **Cached events:** GET `/api/shipments/[id]/tracking-events` → read from DB (no external call)
+- **Bulk poll:** POST `/api/shipments/tracking-poll` → poll all submitted/in_transit
+- **Background poller:** asyncio.Task on FastAPI startup, runs every 3 hours
+- **DB:** `tracking_events` table (FK → shipments, dedup by event_code+event_date UTC)
+- **UI:** 4th "Tracking" tab in shipment detail dialog, vertical timeline, per-row Radar button
+- **Dashboard:** 6 stat cards (total, pending, submitted, in_transit, delivered, failed)
+
 ## Naqel/GN Connect API Quirks
 - Token: POST `/api/identity/Authentication/GetToken`
 - Submit: POST `/api/gnconnect/Shipments` (single object, NOT array)
+- Track: POST `/api/gnconnect/Tracking` → returns **flat list** of events (NOT nested dict)
 - Success: HTTP 201, status="Success", airwaybill + shipmentLabel (base64)
 - numberOfPieces must be string, not int
 - COD field typo: `codCurrnecy` (not codCurrency)
 - Shipper country code: ISO3 (TUR, SAU); Consignee: ISO2 (TR, SA)
 - companyName required for shipper (default: "Bazaarica")
+- Tracking fields: `eventName` (not eventDescription), `actionDate` (not eventDate), `eventCity`+`eventCountry` (not eventLocation)
+- Tracking dedup: normalize dates to UTC before comparing (DB stores in server TZ)
+
+## SMSA Express Integration (Planned)
+- **Protocol:** SOAP/XML (not REST)
+- **Endpoint:** `http://track.smsaexpress.com/SECOM/SMSAwebService.asmx`
+- **Auth:** passKey string (static, per-call). Test key `Testing0` only works for city lookup.
+- **Python lib:** `zeep` (SOAP client)
+- **Key methods:** addShipPDF (create+AWB+PDF), getTrack, getStatus, getPDF, getShipCharges, cancelShipment, getShipUpdates
+- **City codes:** String names ("Jeddah"), NOT numeric codes like Naqel
+- **No DB changes needed** — existing shipments/tracking_events tables support both carriers via `carrier_code`
+- **Backend change:** carrier router in submit/track endpoints (check carrier_code → route to Naqel or SMSA)
+- **Waiting for:** SMSA production passKey from account manager (fsaid@smsaexpress.com)
+- **Architecture doc:** `docs/architecture_smsa.html`
 
 ## Development
 ```bash

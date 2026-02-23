@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>bzrcMaster - Naqel Module Architecture</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 2rem; line-height: 1.6; }
+  h1 { font-size: 2rem; color: #38bdf8; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.5rem; color: #7dd3fc; margin: 2rem 0 1rem; border-bottom: 2px solid #1e3a5f; padding-bottom: 0.5rem; }
+  h3 { font-size: 1.1rem; color: #93c5fd; margin: 1.5rem 0 0.5rem; }
+  .subtitle { color: #94a3b8; margin-bottom: 2rem; }
+  .container { max-width: 1200px; margin: 0 auto; }
+
+  /* Flow Diagram */
+  .flow { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 1.5rem 0; padding: 1.5rem; background: #1e293b; border-radius: 12px; border: 1px solid #334155; }
+  .flow-box { padding: 0.75rem 1.25rem; border-radius: 8px; font-weight: 600; font-size: 0.85rem; text-align: center; min-width: 120px; }
+  .flow-arrow { color: #38bdf8; font-size: 1.5rem; font-weight: bold; }
+  .flow-wc { background: #7c3aed; color: white; }
+  .flow-fe { background: #2563eb; color: white; }
+  .flow-api { background: #059669; color: white; }
+  .flow-naqel { background: #dc2626; color: white; }
+  .flow-db { background: #d97706; color: white; }
+  .flow-label { font-size: 0.7rem; color: #94a3b8; text-align: center; display: block; margin-top: 0.25rem; }
+
+  /* Cards */
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 1.5rem; margin: 1rem 0; }
+  .card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+  .card-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1rem; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin: 0.5rem 0; font-size: 0.85rem; }
+  th { background: #0f172a; color: #7dd3fc; padding: 0.6rem 0.75rem; text-align: left; font-weight: 600; border-bottom: 2px solid #334155; }
+  td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #1e3a5f; }
+  tr:hover td { background: #1a2744; }
+  .col-name { color: #f8fafc; font-family: 'Consolas', monospace; font-weight: 500; }
+  .col-type { color: #a78bfa; font-family: 'Consolas', monospace; font-size: 0.8rem; }
+  .col-pk { color: #fbbf24; font-weight: bold; }
+  .col-fk { color: #f472b6; }
+  .col-null { color: #64748b; font-size: 0.75rem; }
+  .col-required { color: #34d399; font-size: 0.75rem; }
+
+  /* Endpoint styles */
+  .endpoint { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border-radius: 8px; margin: 0.5rem 0; background: #0f172a; border: 1px solid #1e3a5f; }
+  .method { padding: 0.25rem 0.5rem; border-radius: 4px; font-weight: 700; font-size: 0.75rem; min-width: 50px; text-align: center; font-family: monospace; }
+  .method-get { background: #059669; color: white; }
+  .method-post { background: #2563eb; color: white; }
+  .method-patch { background: #d97706; color: white; }
+  .endpoint-path { font-family: 'Consolas', monospace; color: #e2e8f0; font-weight: 500; }
+  .endpoint-desc { color: #94a3b8; font-size: 0.8rem; margin-left: auto; }
+
+  /* Status flow */
+  .status-flow { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 1rem 0; }
+  .status-box { padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
+  .status-created { background: #374151; color: #d1d5db; }
+  .status-submitted { background: #1e3a5f; color: #93c5fd; }
+  .status-failed { background: #450a0a; color: #fca5a5; }
+  .status-transit { background: #451a03; color: #fdba74; }
+  .status-delivered { background: #052e16; color: #86efac; }
+  .status-arrow { color: #64748b; }
+
+  /* Grid */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 768px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  /* ERD relationship lines */
+  .rel { color: #f472b6; font-size: 0.8rem; padding: 0.5rem; background: #1a1a2e; border-radius: 6px; margin: 0.5rem 0; font-family: monospace; }
+
+  /* Badge */
+  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; }
+  .badge-green { background: #052e16; color: #86efac; }
+  .badge-blue { background: #1e3a5f; color: #93c5fd; }
+  .badge-red { background: #450a0a; color: #fca5a5; }
+  .badge-yellow { background: #451a03; color: #fde68a; }
+  .badge-purple { background: #2e1065; color: #c4b5fd; }
+
+  /* Code block */
+  .code { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 1rem; font-family: 'Consolas', monospace; font-size: 0.8rem; overflow-x: auto; white-space: pre; color: #a5b4fc; }
+
+  /* Section divider */
+  .divider { border: none; border-top: 1px solid #1e3a5f; margin: 2rem 0; }
+
+  .env-var { color: #fbbf24; }
+  .env-val { color: #86efac; }
+
+  .note { background: #1e293b; border-left: 3px solid #38bdf8; padding: 0.75rem 1rem; border-radius: 0 8px 8px 0; margin: 1rem 0; font-size: 0.85rem; color: #94a3b8; }
+  .phase-badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; margin-left: 0.5rem; }
+  .phase-1 { background: #1e3a5f; color: #93c5fd; }
+  .phase-2 { background: #2e1065; color: #c4b5fd; }
+  .phase-3 { background: #052e16; color: #86efac; }
+  .phase-4 { background: #451a03; color: #fdba74; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>bzrcMaster - Naqel Module</h1>
+<p class="subtitle">Architecture Documentation | Carrier: Naqel / GN Connect | v3.0 | Feb 2026</p>
+
+<!-- ============================================ -->
+<h2>1. System Overview</h2>
+
+<div class="flow">
+  <div>
+    <div class="flow-box flow-wc">WooCommerce<br>API v3</div>
+    <span class="flow-label">master.bazaarica.com</span>
+  </div>
+  <span class="flow-arrow">&rarr;</span>
+  <div>
+    <div class="flow-box flow-fe">Next.js 16<br>Frontend</div>
+    <span class="flow-label">hero.bazaarica.com:3001</span>
+  </div>
+  <span class="flow-arrow">&rarr;</span>
+  <div>
+    <div class="flow-box flow-api">FastAPI<br>Backend</div>
+    <span class="flow-label">dev.bazaarica.com:8000</span>
+  </div>
+  <span class="flow-arrow">&rarr;</span>
+  <div>
+    <div class="flow-box flow-db">PostgreSQL<br>Database</div>
+    <span class="flow-label">bzrc_shipping_integ</span>
+  </div>
+</div>
+
+<h3>Shipment Submit Flow</h3>
+<div class="flow">
+  <div class="flow-box flow-fe">Frontend<br>Submit btn</div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box flow-api">FastAPI<br>/submit</div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box flow-naqel">GN Connect<br>Naqel API</div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box flow-db">Store AWB<br>+ Label PDF</div>
+</div>
+
+<h3>Tracking Flow <span class="phase-badge phase-4">Phase 4</span></h3>
+<div class="flow">
+  <div class="flow-box flow-fe">Refresh Status<br>btn / Auto-poll</div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box flow-api">FastAPI<br>/track</div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box flow-naqel">GN Connect<br>Tracking API</div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box flow-db">Store Events<br>+ Update Status</div>
+</div>
+
+<div class="note">
+  <strong>Architecture:</strong> No local database. WC orders are fetched live from WooCommerce REST API.
+  Shipments are created and stored in the remote PostgreSQL via FastAPI.
+  Naqel submission and tracking happen server-to-server (FastAPI &harr; GN Connect API).
+</div>
+
+<!-- ============================================ -->
+<h2>2. Database ERD (PostgreSQL: bzrc_shipping_integ)</h2>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-header">
+      <div class="card-icon" style="background:#d97706;">S</div>
+      <div>
+        <strong style="color:#fbbf24;">shipments</strong>
+        <span class="badge badge-yellow">Main Table</span>
+      </div>
+    </div>
+    <table>
+      <thead><tr><th>Column</th><th>Type</th><th>Constraint</th></tr></thead>
+      <tbody>
+        <tr><td class="col-name col-pk">id</td><td class="col-type">BIGINT</td><td class="col-pk">PK, AUTO</td></tr>
+        <tr><td class="col-name">woo_order_id</td><td class="col-type">BIGINT</td><td class="col-null">nullable, indexed</td></tr>
+        <tr><td class="col-name">woo_order_number</td><td class="col-type">TEXT</td><td class="col-null">nullable</td></tr>
+        <tr><td colspan="3" style="color:#64748b; font-size:0.75rem; padding-top:0.5rem;">-- Carrier Config --</td></tr>
+        <tr><td class="col-name">carrier_code</td><td class="col-type">TEXT</td><td class="col-required">default: gn_connect</td></tr>
+        <tr><td class="col-name">customer_code</td><td class="col-type">TEXT</td><td class="col-required">NOT NULL</td></tr>
+        <tr><td class="col-name">branch_code</td><td class="col-type">TEXT</td><td class="col-required">NOT NULL</td></tr>
+        <tr><td class="col-name">product_type</td><td class="col-type">TEXT</td><td class="col-required">NOT NULL (DLV/RTN)</td></tr>
+        <tr><td class="col-name">airwaybill_number</td><td class="col-type">TEXT</td><td class="col-null">nullable, indexed</td></tr>
+        <tr><td colspan="3" style="color:#64748b; font-size:0.75rem; padding-top:0.5rem;">-- Status & Tracking --</td></tr>
+        <tr><td class="col-name">status</td><td class="col-type">TEXT</td><td class="col-required">indexed (created/submitted/in_transit/delivered/failed)</td></tr>
+        <tr><td class="col-name">status_message</td><td class="col-type">TEXT</td><td class="col-null">nullable</td></tr>
+        <tr><td class="col-name">last_tracked_at</td><td class="col-type">TIMESTAMPTZ</td><td class="col-null">nullable <span class="phase-badge phase-4">P4</span></td></tr>
+        <tr><td class="col-name">label_base64</td><td class="col-type">TEXT</td><td class="col-null">nullable (PDF base64)</td></tr>
+        <tr><td colspan="3" style="color:#64748b; font-size:0.75rem; padding-top:0.5rem;">-- Consignee (20+ cols) | Shipper (18+ cols) | Items (child) --</td></tr>
+        <tr><td class="col-name">carrier_request_payload</td><td class="col-type">JSON</td><td class="col-null">Naqel request</td></tr>
+        <tr><td class="col-name">carrier_response_payload</td><td class="col-type">JSON</td><td class="col-null">Naqel response</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-icon" style="background:#7c3aed;">I</div>
+        <div>
+          <strong style="color:#c4b5fd;">shipment_items</strong>
+          <span class="badge badge-purple">Child Table</span>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>Column</th><th>Type</th><th>Constraint</th></tr></thead>
+        <tbody>
+          <tr><td class="col-name col-pk">id</td><td class="col-type">BIGINT</td><td class="col-pk">PK, AUTO</td></tr>
+          <tr><td class="col-name col-fk">shipment_id</td><td class="col-type">BIGINT</td><td class="col-fk">FK &rarr; shipments.id (CASCADE)</td></tr>
+          <tr><td class="col-name">quantity, weight, customs_value, goods_description, ...</td><td class="col-type">mixed</td><td class="col-null">item details</td></tr>
+        </tbody>
+      </table>
+      <div class="rel">shipments.id &lt;--&gt;&gt; shipment_items.shipment_id (1:N, CASCADE DELETE)</div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-icon" style="background:#059669;">T</div>
+        <div>
+          <strong style="color:#86efac;">tracking_events</strong>
+          <span class="badge badge-green">Phase 4</span>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>Column</th><th>Type</th><th>Constraint</th></tr></thead>
+        <tbody>
+          <tr><td class="col-name col-pk">id</td><td class="col-type">BIGINT</td><td class="col-pk">PK, AUTO</td></tr>
+          <tr><td class="col-name col-fk">shipment_id</td><td class="col-type">BIGINT</td><td class="col-fk">FK &rarr; shipments.id (CASCADE)</td></tr>
+          <tr><td class="col-name">airwaybill_number</td><td class="col-type">TEXT</td><td class="col-required">NOT NULL, indexed</td></tr>
+          <tr><td class="col-name">event_code</td><td class="col-type">TEXT</td><td class="col-null">nullable</td></tr>
+          <tr><td class="col-name">event_description</td><td class="col-type">TEXT</td><td class="col-null">nullable</td></tr>
+          <tr><td class="col-name">event_date</td><td class="col-type">TIMESTAMPTZ</td><td class="col-null">nullable</td></tr>
+          <tr><td class="col-name">event_location</td><td class="col-type">TEXT</td><td class="col-null">nullable</td></tr>
+          <tr><td class="col-name">event_detail</td><td class="col-type">TEXT</td><td class="col-null">nullable</td></tr>
+          <tr><td class="col-name">raw_event_data</td><td class="col-type">JSON</td><td class="col-null">nullable</td></tr>
+          <tr><td class="col-name">created_at</td><td class="col-type">TIMESTAMPTZ</td><td class="col-required">auto</td></tr>
+        </tbody>
+      </table>
+      <div class="rel">shipments.id &lt;--&gt;&gt; tracking_events.shipment_id (1:N, CASCADE DELETE)</div>
+      <div class="note">Dedup: (event_code, event_date) normalized to UTC. GN Connect returns flat list of events.</div>
+    </div>
+  </div>
+</div>
+
+<h3>Shipment Status Flow</h3>
+<div class="status-flow">
+  <span class="status-box status-created">created</span>
+  <span class="status-arrow">&rarr;</span>
+  <span class="status-box status-submitted">submitted</span>
+  <span class="status-arrow">&rarr;</span>
+  <span class="status-box status-transit">in_transit</span>
+  <span class="status-arrow">&rarr;</span>
+  <span class="status-box status-delivered">delivered</span>
+</div>
+<div class="status-flow">
+  <span class="status-box status-created">created</span>
+  <span class="status-arrow">&rarr;</span>
+  <span class="status-box status-failed">submit_failed</span>
+  <span class="status-arrow">&rarr;</span>
+  <span class="status-box status-created">(retry) created</span>
+</div>
+
+<!-- ============================================ -->
+<h2>3. FastAPI Backend Endpoints</h2>
+<p style="color:#94a3b8; margin-bottom:1rem;">Python 3.10 + FastAPI + SQLAlchemy + httpx | Uvicorn :8000 | systemd: bzrc_app.service</p>
+
+<div class="card">
+  <h3>Shipment CRUD</h3>
+  <div class="endpoint">
+    <span class="method method-post">POST</span>
+    <span class="endpoint-path">/shipments/</span>
+    <span class="endpoint-desc">Create shipment + items in DB</span>
+  </div>
+  <div class="endpoint">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/shipments/</span>
+    <span class="endpoint-desc">List (status_filter, woo_order_id, limit, offset)</span>
+  </div>
+  <div class="endpoint">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/shipments/{id}</span>
+    <span class="endpoint-desc">Get single shipment with items</span>
+  </div>
+  <div class="endpoint">
+    <span class="method method-post">POST</span>
+    <span class="endpoint-path">/shipments/{id}/submit</span>
+    <span class="endpoint-desc">Auth &rarr; Build payload &rarr; Call Naqel &rarr; Store AWB + Label</span>
+  </div>
+  <div class="endpoint">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/shipments/{id}/label</span>
+    <span class="endpoint-desc">Download label as PDF (from stored base64)</span>
+  </div>
+
+  <h3 style="margin-top:1.5rem;">Tracking <span class="phase-badge phase-4">Phase 4</span></h3>
+  <div class="endpoint">
+    <span class="method method-post">POST</span>
+    <span class="endpoint-path">/shipments/{id}/track</span>
+    <span class="endpoint-desc">Call GN Connect Tracking &rarr; store events &rarr; update status</span>
+  </div>
+  <div class="endpoint">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/shipments/{id}/tracking-events</span>
+    <span class="endpoint-desc">Read cached events (no external call)</span>
+  </div>
+  <div class="endpoint">
+    <span class="method method-post">POST</span>
+    <span class="endpoint-path">/shipments/tracking/poll</span>
+    <span class="endpoint-desc">Bulk poll all submitted/in_transit shipments</span>
+  </div>
+
+  <h3 style="margin-top:1.5rem;">Exchange Rates</h3>
+  <div class="endpoint">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/exchange-rates/</span>
+    <span class="endpoint-desc">All TCMB rates (cached 4h, DB fallback)</span>
+  </div>
+  <div class="endpoint">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/exchange-rates/convert</span>
+    <span class="endpoint-desc">Convert amount (?from=USD&amp;to=SAR&amp;amount=100)</span>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<h2>4. GN Connect (Naqel) API Details</h2>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Connection</h3>
+    <table>
+      <tbody>
+        <tr><td class="col-name">Protocol</td><td class="col-type">REST / JSON</td></tr>
+        <tr><td class="col-name">Base URL</td><td class="env-val">https://dev.gnteq.app</td></tr>
+        <tr><td class="col-name">Auth</td><td class="env-val">Bearer token (JWT, fresh per request)</td></tr>
+        <tr><td class="col-name">Product Types</td><td class="env-val">DLV (delivery) / RTN (return)</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:1rem;">Endpoints Used</h3>
+    <div class="endpoint">
+      <span class="method method-post">POST</span>
+      <span class="endpoint-path">/api/identity/Authentication/GetToken</span>
+    </div>
+    <div class="endpoint">
+      <span class="method method-post">POST</span>
+      <span class="endpoint-path">/api/gnconnect/Shipments</span>
+    </div>
+    <div class="endpoint">
+      <span class="method method-post">POST</span>
+      <span class="endpoint-path">/api/gnconnect/Tracking</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>API Quirks & Gotchas</h3>
+    <table>
+      <tbody>
+        <tr><td class="col-name" style="color:#fca5a5;">numberOfPieces</td><td>Must be STRING "1", not integer 1</td></tr>
+        <tr><td class="col-name" style="color:#fca5a5;">codCurrnecy</td><td>Typo in API - NOT "codCurrency"</td></tr>
+        <tr><td class="col-name" style="color:#fca5a5;">Shipper country</td><td>ISO3 (TUR, SAU, GBR)</td></tr>
+        <tr><td class="col-name" style="color:#fca5a5;">Consignee country</td><td>ISO2 (TR, SA, GB)</td></tr>
+        <tr><td class="col-name" style="color:#fca5a5;">companyName</td><td>REQUIRED for shipper</td></tr>
+        <tr><td class="col-name" style="color:#fca5a5;">Request body</td><td>Single object, NOT array</td></tr>
+        <tr><td class="col-name" style="color:#fca5a5;">Success HTTP</td><td>Returns 201, not 200</td></tr>
+        <tr><td class="col-name" style="color:#fca5a5;">Token expiry</td><td>Tokens expire - get fresh per request</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:1rem;">Tracking Response Format</h3>
+    <div class="code">[
+  {
+    "airwaybill": "401707257",
+    "eventCode": "102",
+    "eventName": "Dispatched to Destination",
+    "event": "Dispatched to Destination",
+    "actionDate": "2026-02-23T00:41:18+00:00",
+    "eventCountry": "TR",
+    "eventCity": "Istanbul",
+    "notes": "..."
+  },
+  ...
+]
+<span style="color:#fca5a5;">// Returns FLAT LIST (not nested object)
+// Fields: eventName (not eventDescription)
+//         actionDate (not eventDate)
+//         eventCity+eventCountry (not eventLocation)</span></div>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<h2>5. Submit Flow Detail</h2>
+
+<div class="card">
+  <div class="code">1. Read shipment from PostgreSQL (with items)
+
+2. POST https://dev.gnteq.app/api/identity/Authentication/GetToken
+   Body: { username: "***", password: "***" }
+   Response: { token: { access_token: "eyJ...", token_type: "Bearer" } }
+
+3. Build GN Connect payload from DB shipment:
+   - numberOfPieces: STRING "1" (not integer!)
+   - supplierCode: "SPL"
+   - shipper.countryCode: ISO3 (TUR, SAU) &larr; converted from ISO2
+   - consignee.countryCode: ISO2 (JO, SA, TR) &larr; kept as-is
+   - COD field typo: "codCurrnecy" (not codCurrency)
+
+4. POST https://dev.gnteq.app/api/gnconnect/Shipments
+   Header: Authorization: Bearer {token}
+   Body: single object (NOT array)
+
+   Success Response (HTTP 201):
+   {
+     "status": "Success",
+     "airwaybill": "GNTUPD0022867326",
+     "airwaybillId": 24877553,
+     "shipmentLabel": "JVBERi0x..." (base64 PDF)
+   }
+
+5. Store in DB:
+   - airwaybill_number = response.airwaybill
+   - tracking_number = response.airwaybill
+   - label_base64 = response.shipmentLabel
+   - status = "submitted"
+   - carrier_request_payload = full request JSON
+   - carrier_response_payload = full response JSON</div>
+</div>
+
+<!-- ============================================ -->
+<h2>6. Tracking Flow Detail <span class="phase-badge phase-4">Phase 4</span></h2>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Single Track (POST /shipments/{id}/track)</h3>
+    <div class="code">1. Read shipment from DB
+2. Get Naqel token (get_naqel_token())
+3. POST /api/gnconnect/Tracking
+   { airwaybill, customerCode, branchCode }
+4. Parse response: flat list &rarr; events[]
+5. Dedup: (event_code, event_date) normalized UTC
+6. Store new events in tracking_events table
+7. Derive status from latest event description:
+   - "Delivered" &rarr; delivered
+   - "Dispatched"/"PickedUp" &rarr; in_transit
+   - "Returned"/"Exception" &rarr; failed
+8. Update shipment.status + last_tracked_at
+9. Return events + current_status</div>
+  </div>
+  <div class="card">
+    <h3>Background Poller</h3>
+    <div class="code">- asyncio.Task on FastAPI startup
+- Runs every 3 hours
+- Queries: submitted/in_transit shipments with AWB
+- Tracks each via GN Connect
+- Updates status + stores events
+- Logs: "Polled X shipments, Y updated"</div>
+
+    <h3 style="margin-top:1rem;">Dedup Key Normalization</h3>
+    <div class="code">Problem: DB datetime str() = "2026-02-23 00:41:18+01:00"
+         API datetime str = "2026-02-23T00:41:18+00:00"
+
+Solution: _normalize_date_key()
+  1. Parse with datetime.fromisoformat()
+  2. Convert to UTC: .astimezone(timezone.utc)
+  3. Format: "%Y-%m-%dT%H:%M:%S+00:00"</div>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<h2>7. Frontend (Next.js 16)</h2>
+<p style="color:#94a3b8; margin-bottom:1rem;">hero.bazaarica.com:3001 | PM2: bzrc-hero</p>
+
+<div class="card">
+  <h3>Pages</h3>
+  <div class="endpoint">
+    <span class="method method-get" style="background:#334155;">PAGE</span>
+    <span class="endpoint-path">/</span>
+    <span class="endpoint-desc">Dashboard - 6 stat cards (total, pending, submitted, in_transit, delivered, failed)</span>
+  </div>
+  <div class="endpoint">
+    <span class="method method-get" style="background:#334155;">PAGE</span>
+    <span class="endpoint-path">/orders</span>
+    <span class="endpoint-desc">WC orders (sync, translate, city match, carrier select, create shipment)</span>
+  </div>
+  <div class="endpoint">
+    <span class="method method-get" style="background:#334155;">PAGE</span>
+    <span class="endpoint-path">/shipments</span>
+    <span class="endpoint-desc">Shipments (submit, track, labels, timeline)</span>
+  </div>
+
+  <h3 style="margin-top:1.5rem;">Shipment Detail Dialog — 4 Tabs</h3>
+  <table>
+    <tr><th>Tab</th><th>Features</th></tr>
+    <tr><td class="col-name">Details</td><td>Shipment info, consignee, shipper, items</td></tr>
+    <tr><td class="col-name">Waybill</td><td>PDF preview (if label_base64 exists)</td></tr>
+    <tr><td class="col-name">Payload</td><td>Raw carrier request/response JSON</td></tr>
+    <tr><td class="col-name">Tracking <span class="phase-badge phase-4">P4</span></td><td>AWB, status badge, last checked, Refresh Status button, vertical timeline with events</td></tr>
+  </table>
+</div>
+
+<!-- ============================================ -->
+<h2>8. Order Processing Pipeline</h2>
+
+<div class="flow">
+  <div class="flow-box flow-wc">WC Order<span class="flow-label">Manual Sync</span></div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box" style="background:#7c3aed;color:white">Translate<span class="flow-label">Gemini API</span></div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box" style="background:#0891b2;color:white">City Match<span class="flow-label">Google Sheets + Fuzzy</span></div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box" style="background:#d97706;color:white">Currency<span class="flow-label">TCMB via FastAPI</span></div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box flow-api">Create Shipment<span class="flow-label">Remote API</span></div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box flow-naqel">Submit<span class="flow-label">GN Connect</span></div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Gemini Translation (3 modes)</h3>
+    <table>
+      <tr><th>Mode</th><th>Used For</th><th>Example</th></tr>
+      <tr><td><span class="badge badge-purple">Transliterate</span></td><td>Names</td><td>&#1607;&#1583;&#1575;&#1610;&#1577; &rarr; Hedaye</td></tr>
+      <tr><td><span class="badge badge-blue">Address</span></td><td>address_1, address_2</td><td>&#1588;&#1575;&#1585;&#1593; &#1575;&#1604;&#1605;&#1604;&#1603; &rarr; King Street</td></tr>
+      <tr><td><span class="badge badge-green">Generic</span></td><td>Other fields</td><td>Pure 1:1 translation</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h3>City Code Matching (4 steps)</h3>
+    <div class="status-flow">
+      <span class="status-box status-delivered">Exact</span>
+      <span class="status-arrow">&rarr;</span>
+      <span class="status-box" style="background:#451a03;color:#fde68a">Fuzzy</span>
+      <span class="status-arrow">&rarr;</span>
+      <span class="status-box" style="background:#451a03;color:#fdba74">Gemini Arabic</span>
+      <span class="status-arrow">&rarr;</span>
+      <span class="status-box status-failed">Manual</span>
+    </div>
+    <div class="note">Data: Google Sheet "naqelCityCodes" (4,449 rows)</div>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<h2>9. Environment Variables</h2>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Frontend (.env)</h3>
+    <div class="code"><span class="env-var">SHIPPING_API_URL</span>=<span class="env-val">https://dev.bazaarica.com</span>
+<span class="env-var">WOO_BASE_URL</span>=<span class="env-val">https://master.bazaarica.com</span>
+<span class="env-var">WOO_CONSUMER_KEY</span>=<span class="env-val">ck_***</span>
+<span class="env-var">WOO_CONSUMER_SECRET</span>=<span class="env-val">cs_***</span>
+<span class="env-var">NAQEL_CUSTOMER_CODE</span>=<span class="env-val">***</span>
+<span class="env-var">NAQEL_BRANCH_CODE</span>=<span class="env-val">***</span>
+<span class="env-var">GEMINI_API_KEY</span>=<span class="env-val">AIzaSy...</span>
+<span class="env-var">GOOGLE_SERVICE_ACCOUNT_KEY_FILE</span>=<span class="env-val">credentials/google-service-account.json</span>
+<span class="env-var">GOOGLE_SHEET_ID</span>=<span class="env-val">109aKj27...r3l4</span></div>
+  </div>
+  <div class="card">
+    <h3>Backend (.env)</h3>
+    <div class="code"><span class="env-var">DATABASE_URL</span>=<span class="env-val">postgresql://bzrc:***@localhost:5432/bzrc_shipping_integ</span>
+<span class="env-var">NAQEL_BASE_URL</span>=<span class="env-val">https://dev.gnteq.app</span>
+<span class="env-var">NAQEL_USERNAME</span>=<span class="env-val">***</span>
+<span class="env-var">NAQEL_PASSWORD</span>=<span class="env-val">***</span>
+<span class="env-var">NAQEL_SUPPLIER_CODE</span>=<span class="env-val">SPL</span></div>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<h2>10. Key Files</h2>
+
+<div class="card">
+  <table>
+    <thead><tr><th>File</th><th>Purpose</th><th>Phase</th></tr></thead>
+    <tbody>
+      <tr><td class="col-name">server/main.py</td><td>FastAPI backend (CRUD + Naqel + tracking + exchange rates)</td><td>P1-P4</td></tr>
+      <tr><td class="col-name">src/lib/api/shipping-client.ts</td><td>Shipping API HTTP client (CRUD + submit + track)</td><td>P1, P4</td></tr>
+      <tr><td class="col-name">src/lib/api/shipping-types.ts</td><td>TypeScript types (ShipmentRead, TrackingEvent, etc.)</td><td>P1, P4</td></tr>
+      <tr><td class="col-name">src/lib/api/woo-client.ts</td><td>WooCommerce REST API client</td><td>P1</td></tr>
+      <tr><td class="col-name">src/lib/api/woo-to-shipment.ts</td><td>WC Order &rarr; ShipmentCreate mapper</td><td>P2</td></tr>
+      <tr><td class="col-name">src/lib/api/gemini.ts</td><td>Gemini API (translate + transliterate + city match)</td><td>P2</td></tr>
+      <tr><td class="col-name">src/lib/api/city-matcher.ts</td><td>4-step city code fuzzy matching pipeline</td><td>P2</td></tr>
+      <tr><td class="col-name">src/lib/api/google-sheets.ts</td><td>Google Sheets API (raw JWT, zero deps)</td><td>P2</td></tr>
+      <tr><td class="col-name">src/app/(dashboard)/orders/page.tsx</td><td>Orders (edit, translate, city match, carrier select)</td><td>P2</td></tr>
+      <tr><td class="col-name">src/app/(dashboard)/shipments/page.tsx</td><td>Shipments (submit, track, labels, timeline)</td><td>P1, P4</td></tr>
+      <tr><td class="col-name">src/app/(dashboard)/page.tsx</td><td>Dashboard (6 stat cards)</td><td>P1, P4</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ============================================ -->
+<h2>11. Infrastructure</h2>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Server: 135.181.215.44 (Hetzner)</h3>
+    <table>
+      <tbody>
+        <tr><td class="col-name">OS</td><td>Ubuntu 22.04</td></tr>
+        <tr><td class="col-name">Node.js</td><td>v20.20.0</td></tr>
+        <tr><td class="col-name">Python</td><td>3.10</td></tr>
+        <tr><td class="col-name">PostgreSQL</td><td>Local, user: bzrc</td></tr>
+        <tr><td class="col-name">SSL</td><td>Cloudflare (origin certs)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h3>Services</h3>
+    <table>
+      <tbody>
+        <tr><td class="col-name">bzrc-hero</td><td>PM2 | Next.js :3001 | hero.bazaarica.com</td></tr>
+        <tr><td class="col-name">bzrc_app.service</td><td>systemd | FastAPI :8000 | dev.bazaarica.com</td></tr>
+        <tr><td class="col-name">PostgreSQL</td><td>systemd | :5432 | db: bzrc_shipping_integ</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<hr class="divider">
+<p style="text-align:center; color:#475569; font-size:0.8rem; margin-top:2rem;">
+  bzrcMaster v3.0 | Module: Naqel (GN Connect) | Phases 1-4 Complete | Feb 2026
+</p>
+
+</div>
+</body>
+</html>

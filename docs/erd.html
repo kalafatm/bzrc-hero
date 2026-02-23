@@ -174,7 +174,7 @@
 <div id="header">
   <h1>
     <span class="logo">BM</span>
-    bzrcMaster — ERD v3.0
+    bzrcMaster — ERD v4.0
   </h1>
   <div class="info">
     <div class="legend">
@@ -184,7 +184,7 @@
       <div class="legend-item"><div class="legend-dot" style="background:#0891b2"></div> Google Sheets</div>
       <div class="legend-item"><div class="legend-dot" style="background:#dc2626"></div> External API</div>
     </div>
-    <span class="badge">3 DB Tables + 4 Sheets + 3 APIs</span>
+    <span class="badge">4 DB Tables + 4 Sheets + 4 APIs</span>
     <span class="badge">PostgreSQL 16 (bzrc_shipping_integ)</span>
     <span class="badge">Drag to rearrange</span>
   </div>
@@ -249,6 +249,7 @@ const tables = [
       { name: 'status', type: 'TEXT', idx: true },
       { name: 'status_message', type: 'TEXT', nullable: true },
       { name: 'tracking_number', type: 'TEXT', nullable: true },
+      { name: 'last_tracked_at', type: 'TIMESTAMPTZ', nullable: true },
       { label: 'Carrier Payloads' },
       { name: 'carrier_request_payload', type: 'JSON', nullable: true },
       { name: 'carrier_response_payload', type: 'JSON', nullable: true },
@@ -284,8 +285,26 @@ const tables = [
     ]
   },
   {
+    id: 'tracking_events', model: 'TrackingEvent', dbName: 'tracking_events', theme: 'shipping',
+    x: 500, y: 580,
+    sections: [
+      { name: 'id', type: 'BIGINT', pk: true },
+      { name: 'shipment_id', type: 'BIGINT', fk: 'shipments', idx: true },
+      { name: 'airwaybill_number', type: 'TEXT', idx: true },
+      { label: 'Event Data' },
+      { name: 'event_code', type: 'TEXT', nullable: true },
+      { name: 'event_description', type: 'TEXT', nullable: true },
+      { name: 'event_date', type: 'TIMESTAMPTZ', nullable: true },
+      { name: 'event_location', type: 'TEXT', nullable: true },
+      { name: 'event_detail', type: 'TEXT', nullable: true },
+      { name: 'raw_event_data', type: 'JSON', nullable: true },
+      { label: 'Dedup: (event_code, event_date) UTC' },
+      { name: 'created_at', type: 'TIMESTAMPTZ' },
+    ]
+  },
+  {
     id: 'exchange_rates', model: 'ExchangeRate', dbName: 'exchange_rates', theme: 'cache',
-    x: 880, y: 520,
+    x: 880, y: 580,
     sections: [
       { name: 'id', type: 'BIGINT', pk: true },
       { name: 'currency_code', type: 'VARCHAR(3)', unique: true },
@@ -396,11 +415,28 @@ const tables = [
       { name: 'POST /GetToken', type: 'JWT token' },
       { label: 'Shipment Operations' },
       { name: 'POST /Shipments', type: 'Create + AWB' },
-      { name: 'GET /Shipments/{awb}', type: 'Track' },
+      { name: 'POST /Tracking', type: 'Track by AWB' },
       { label: 'Response' },
       { name: 'airwaybill', type: 'STRING' },
       { name: 'shipmentLabel', type: 'Base64 PDF' },
-      { name: 'status', type: 'Success | Failed' },
+      { name: 'tracking events[]', type: 'Flat list' },
+    ]
+  },
+  {
+    id: 'api_smsa', model: 'SMSA Express', dbName: 'track.smsaexpress.com', theme: 'api',
+    x: 1180, y: 280,
+    sections: [
+      { label: 'Auth: passKey (static)' },
+      { label: 'SOAP Methods (25 total)' },
+      { name: 'addShipPDF', type: 'Create + AWB + PDF' },
+      { name: 'getTrack', type: 'Tracking history' },
+      { name: 'getStatus', type: 'Current status' },
+      { name: 'getPDF', type: 'Label PDF' },
+      { name: 'getShipCharges', type: 'Rate calc' },
+      { name: 'cancelShipment', type: 'Cancel + reason' },
+      { name: 'getShipUpdates', type: 'Cursor polling' },
+      { name: 'getRTLCities', type: 'City names' },
+      { label: 'Protocol: SOAP/XML' },
     ]
   },
   {
@@ -430,8 +466,10 @@ const tables = [
 // Define relationships
 const relationships = [
   { from: 'shipment_items', fromField: 'shipment_id', to: 'shipments', toField: 'id', type: 'many-to-one' },
+  { from: 'tracking_events', fromField: 'shipment_id', to: 'shipments', toField: 'id', type: 'many-to-one' },
   { from: 'shipments', fromField: 'woo_order_id', to: 'woo_orders', toField: 'id', type: 'many-to-one' },
   { from: 'shipments', fromField: 'carrier_code', to: 'api_naqel', toField: 'POST /Shipments', type: 'many-to-one', dashed: true },
+  { from: 'shipments', fromField: 'carrier_code', to: 'api_smsa', toField: 'addShipPDF', type: 'many-to-one', dashed: true },
   { from: 'woo_orders', fromField: 'shipping.country', to: 'sheet_exit', toField: 'destinationCountry', type: 'many-to-one', dashed: true },
   { from: 'woo_orders', fromField: 'shipping.city', to: 'sheet_cities', toField: 'cityEN', type: 'many-to-one', dashed: true },
   { from: 'sheet_carrier', fromField: 'carrierCode', to: 'shipments', toField: 'carrier_code', type: 'many-to-one', dashed: true },

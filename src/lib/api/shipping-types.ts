@@ -133,9 +133,44 @@ export interface ShipmentRead {
   airwaybill_number: string | null;
   tracking_number: string | null;
   label_base64: string | null;
+  last_tracked_at: string | null;
   created_at: string;
   updated_at: string;
   items: ShipmentItemRead[];
+}
+
+// ── Tracking ─────────────────────────────────────────────────
+export interface TrackingEvent {
+  id: number;
+  shipment_id: number;
+  airwaybill_number: string;
+  event_code: string | null;
+  event_description: string | null;
+  event_date: string | null;
+  event_location: string | null;
+  event_detail: string | null;
+  created_at: string;
+}
+
+export interface TrackingResponse {
+  shipment_id: number;
+  airwaybill_number: string;
+  current_status: string;
+  events: TrackingEvent[];
+  last_tracked_at: string | null;
+  raw_carrier_response?: Record<string, unknown>;
+}
+
+export interface BulkTrackingResult {
+  total: number;
+  updated: number;
+  failed: number;
+  results: {
+    shipment_id: number;
+    airwaybill_number: string;
+    status: string;
+    error?: string;
+  }[];
 }
 
 // ── List query params ──────────────────────────────────────────

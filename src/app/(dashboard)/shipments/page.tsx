@@ -30,6 +30,9 @@ import {
   ChevronRight,
   Download,
   FileText,
+  Radar,
+  MapPin,
+  Clock,
 } from "lucide-react";
 
 interface ShipmentData {
@@ -51,6 +54,7 @@ interface ShipmentData {
   status_message: string | null;
   airwaybill_number: string | null;
   tracking_number: string | null;
+  last_tracked_at: string | null;
   created_at: string;
   updated_at: string;
   shipper_reference1: string | null;
@@ -97,6 +101,26 @@ interface ShipmentData {
   }[];
 }
 
+interface TrackingEventData {
+  id: number;
+  shipment_id: number;
+  airwaybill_number: string;
+  event_code: string | null;
+  event_description: string | null;
+  event_date: string | null;
+  event_location: string | null;
+  event_detail: string | null;
+  created_at: string;
+}
+
+interface TrackingData {
+  shipment_id: number;
+  airwaybill_number: string;
+  current_status: string;
+  events: TrackingEventData[];
+  last_tracked_at: string | null;
+}
+
 const STATUS_COLORS: Record<string, string> = {
   created: "bg-gray-100 text-gray-700",
   draft: "bg-gray-100 text-gray-700",
@@ -124,6 +148,11 @@ export default function ShipmentsPage() {
 
   // Submit state
   const [submitting, setSubmitting] = useState<Set<number>>(new Set());
+
+  // Tracking state
+  const [tracking, setTracking] = useState<Set<number>>(new Set());
+  const [trackingData, setTrackingData] = useState<Record<number, TrackingData>>({});
+  const [trackingAll, setTrackingAll] = useState(false);
 
   const fetchShipments = useCallback(async () => {
     setLoading(true);
@@ -258,6 +287,75 @@ export default function ShipmentsPage() {
     }
   };
 
+  const handleTrackSingle = async (shipment: ShipmentData) => {
+    setTracking((prev) => new Set(prev).add(shipment.id));
+    try {
+      const res = await fetch(`/api/shipments/${shipment.id}/track`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (json.error) {
+        toast.error(`#${shipment.id}: ${json.error}`);
+      } else {
+        setTrackingData((prev) => ({ ...prev, [shipment.id]: json }));
+        if (json.current_status && json.current_status !== shipment.status) {
+          toast.success(
+            `#${shipment.id} status: ${json.current_status} (${json.events?.length || 0} events)`
+          );
+          fetchShipments();
+        } else {
+          toast.success(
+            `#${shipment.id}: ${json.events?.length || 0} events loaded`
+          );
+        }
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Tracking failed");
+    }
+    setTracking((prev) => {
+      const next = new Set(prev);
+      next.delete(shipment.id);
+      return next;
+    });
+  };
+
+  const handleLoadCachedEvents = async (shipmentId: number) => {
+    try {
+      const res = await fetch(`/api/shipments/${shipmentId}/tracking-events`);
+      const json = await res.json();
+      if (!json.error) {
+        setTrackingData((prev) => ({ ...prev, [shipmentId]: json }));
+      }
+    } catch {
+      // Silent fail for cached load
+    }
+  };
+
+  const handleTrackAll = async () => {
+    setTrackingAll(true);
+    try {
+      const res = await fetch("/api/shipments/tracking-poll", {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (json.error) {
+        toast.error(json.error);
+      } else {
+        toast.success(
+          `Tracked ${json.total} shipments: ${json.updated} updated, ${json.failed} failed`
+        );
+        fetchShipments();
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Bulk tracking failed");
+    }
+    setTrackingAll(false);
+  };
+
+  const isTrackable = (s: ShipmentData) =>
+    !!s.airwaybill_number &&
+    (s.status === "submitted" || s.status === "in_transit");
+
   const formatDate = (d: string) =>
     new Date(d).toLocaleDateString("en-US", {
       day: "2-digit",
@@ -287,6 +385,16 @@ export default function ShipmentsPage() {
                 : `Submit to Naqel (${selected.size})`}
             </Button>
           )}
+          <Button
+            variant="outline"
+            onClick={handleTrackAll}
+            disabled={trackingAll}
+          >
+            <Radar
+              className={`size-4 ${trackingAll ? "animate-spin" : ""}`}
+            />
+            {trackingAll ? "Tracking..." : "Track All"}
+          </Button>
           <Button
             variant="outline"
             onClick={fetchShipments}
@@ -455,6 +563,19 @@ export default function ShipmentsPage() {
                               {submitting.has(s.id) ? "..." : "Submit"}
                             </Button>
                           )}
+                          {isTrackable(s) && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleTrackSingle(s)}
+                              disabled={tracking.has(s.id)}
+                              title="Refresh Tracking"
+                            >
+                              <Radar
+                                className={`size-3.5 ${tracking.has(s.id) ? "animate-spin" : ""}`}
+                              />
+                            </Button>
+                          )}
                           {s.airwaybill_number && (
                             <Button
                               size="sm"
@@ -515,10 +636,21 @@ export default function ShipmentsPage() {
 
           {detail && (
             <Tabs defaultValue="summary" className="w-full">
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="summary">Summary</TabsTrigger>
                 <TabsTrigger value="waybill">Waybill</TabsTrigger>
                 <TabsTrigger value="items">Items</TabsTrigger>
+                <TabsTrigger
+                  value="tracking"
+                  disabled={!detail.airwaybill_number}
+                  onClick={() => {
+                    if (detail.airwaybill_number && !trackingData[detail.id]) {
+                      handleLoadCachedEvents(detail.id);
+                    }
+                  }}
+                >
+                  Tracking
+                </TabsTrigger>
               </TabsList>
 
               {/* ── Summary Tab ─────────────────────────── */}
@@ -884,6 +1016,123 @@ export default function ShipmentsPage() {
                     </>
                   )}
                 </div>
+              </TabsContent>
+
+              {/* ── Tracking Tab ─────────────────────────── */}
+              <TabsContent value="tracking" className="space-y-4 mt-4">
+                {detail.airwaybill_number ? (
+                  <>
+                    {/* AWB + Refresh */}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-mono font-medium text-sm">
+                          AWB: {detail.airwaybill_number}
+                        </div>
+                        {trackingData[detail.id]?.last_tracked_at && (
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            <Clock className="inline size-3 mr-1" />
+                            Last checked:{" "}
+                            {formatDate(trackingData[detail.id].last_tracked_at!)}
+                          </div>
+                        )}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleTrackSingle(detail)}
+                        disabled={tracking.has(detail.id)}
+                      >
+                        <Radar
+                          className={`size-4 ${tracking.has(detail.id) ? "animate-spin" : ""}`}
+                        />
+                        {tracking.has(detail.id) ? "Tracking..." : "Refresh Status"}
+                      </Button>
+                    </div>
+
+                    {/* Current Status Badge */}
+                    {trackingData[detail.id] && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-muted-foreground">Current Status:</span>
+                        <Badge
+                          className={
+                            STATUS_COLORS[trackingData[detail.id].current_status] ||
+                            "bg-gray-100 text-gray-700"
+                          }
+                        >
+                          {trackingData[detail.id].current_status}
+                        </Badge>
+                      </div>
+                    )}
+
+                    <Separator />
+
+                    {/* Timeline */}
+                    {trackingData[detail.id]?.events?.length > 0 ? (
+                      <div className="space-y-0">
+                        <p className="text-sm font-semibold mb-3">
+                          Tracking Events ({trackingData[detail.id].events.length})
+                        </p>
+                        <div className="relative pl-6">
+                          {/* Vertical line */}
+                          <div className="absolute left-[9px] top-2 bottom-2 w-px bg-border" />
+                          {trackingData[detail.id].events.map((event, idx) => (
+                            <div key={event.id} className="relative pb-4 last:pb-0">
+                              {/* Dot */}
+                              <div
+                                className={`absolute -left-6 top-1.5 size-[10px] rounded-full border-2 ${
+                                  idx === 0
+                                    ? "bg-primary border-primary"
+                                    : "bg-background border-muted-foreground/40"
+                                }`}
+                              />
+                              <div className="text-sm">
+                                <div className="font-medium">
+                                  {event.event_description || event.event_code || "Status Update"}
+                                </div>
+                                <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+                                  {event.event_date && (
+                                    <span>
+                                      <Clock className="inline size-3 mr-0.5" />
+                                      {formatDate(event.event_date)}
+                                    </span>
+                                  )}
+                                  {event.event_location && (
+                                    <span>
+                                      <MapPin className="inline size-3 mr-0.5" />
+                                      {event.event_location}
+                                    </span>
+                                  )}
+                                  {event.event_code && (
+                                    <span className="font-mono">
+                                      [{event.event_code}]
+                                    </span>
+                                  )}
+                                </div>
+                                {event.event_detail && (
+                                  <div className="text-xs text-muted-foreground mt-0.5">
+                                    {event.event_detail}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : trackingData[detail.id] ? (
+                      <div className="text-center py-6 text-muted-foreground text-sm">
+                        No tracking events yet. Click &quot;Refresh Status&quot; to fetch from carrier.
+                      </div>
+                    ) : (
+                      <div className="text-center py-6 text-muted-foreground text-sm">
+                        Click &quot;Refresh Status&quot; to fetch tracking information from the carrier.
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No airwaybill number — submit shipment first
+                  </div>
+                )}
               </TabsContent>
             </Tabs>
           )}

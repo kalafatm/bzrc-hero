@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>bzrcMaster - SMSA Module Architecture (Plan)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 2rem; line-height: 1.6; }
+  h1 { font-size: 2rem; color: #38bdf8; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.5rem; color: #7dd3fc; margin: 2rem 0 1rem; border-bottom: 2px solid #1e3a5f; padding-bottom: 0.5rem; }
+  h3 { font-size: 1.1rem; color: #93c5fd; margin: 1.5rem 0 0.5rem; }
+  .subtitle { color: #94a3b8; margin-bottom: 2rem; }
+  .container { max-width: 1200px; margin: 0 auto; }
+
+  .flow { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 1.5rem 0; padding: 1.5rem; background: #1e293b; border-radius: 12px; border: 1px solid #334155; }
+  .flow-box { padding: 0.75rem 1.25rem; border-radius: 8px; font-weight: 600; font-size: 0.85rem; text-align: center; min-width: 120px; }
+  .flow-arrow { color: #38bdf8; font-size: 1.5rem; font-weight: bold; }
+  .flow-wc { background: #7c3aed; color: white; }
+  .flow-fe { background: #2563eb; color: white; }
+  .flow-api { background: #059669; color: white; }
+  .flow-smsa { background: #0891b2; color: white; }
+  .flow-naqel { background: #dc2626; color: white; }
+  .flow-db { background: #d97706; color: white; }
+  .flow-label { font-size: 0.7rem; color: #94a3b8; text-align: center; display: block; margin-top: 0.25rem; }
+
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 1.5rem; margin: 1rem 0; }
+  .card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+
+  table { width: 100%; border-collapse: collapse; margin: 0.5rem 0; font-size: 0.85rem; }
+  th { background: #0f172a; color: #7dd3fc; padding: 0.6rem 0.75rem; text-align: left; font-weight: 600; border-bottom: 2px solid #334155; }
+  td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #1e3a5f; }
+  tr:hover td { background: #1a2744; }
+  .col-name { color: #f8fafc; font-family: 'Consolas', monospace; font-weight: 500; }
+  .col-type { color: #a78bfa; font-family: 'Consolas', monospace; font-size: 0.8rem; }
+  .col-pk { color: #fbbf24; font-weight: bold; }
+  .col-fk { color: #f472b6; }
+  .col-null { color: #64748b; font-size: 0.75rem; }
+  .col-required { color: #34d399; font-size: 0.75rem; }
+
+  .endpoint { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border-radius: 8px; margin: 0.5rem 0; background: #0f172a; border: 1px solid #1e3a5f; }
+  .method { padding: 0.25rem 0.5rem; border-radius: 4px; font-weight: 700; font-size: 0.75rem; min-width: 50px; text-align: center; font-family: monospace; }
+  .method-get { background: #059669; color: white; }
+  .method-post { background: #2563eb; color: white; }
+  .method-patch { background: #d97706; color: white; }
+  .method-soap { background: #0891b2; color: white; }
+  .endpoint-path { font-family: 'Consolas', monospace; color: #e2e8f0; font-weight: 500; }
+  .endpoint-desc { color: #94a3b8; font-size: 0.8rem; margin-left: auto; }
+
+  .status-flow { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 1rem 0; }
+  .status-box { padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
+  .status-created { background: #374151; color: #d1d5db; }
+  .status-submitted { background: #1e3a5f; color: #93c5fd; }
+  .status-failed { background: #450a0a; color: #fca5a5; }
+  .status-transit { background: #451a03; color: #fdba74; }
+  .status-delivered { background: #052e16; color: #86efac; }
+  .status-cancelled { background: #4a1d96; color: #c4b5fd; }
+  .status-arrow { color: #64748b; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
+  @media (max-width: 900px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; }
+  .badge-green { background: #052e16; color: #86efac; }
+  .badge-blue { background: #1e3a5f; color: #93c5fd; }
+  .badge-red { background: #450a0a; color: #fca5a5; }
+  .badge-yellow { background: #451a03; color: #fde68a; }
+  .badge-purple { background: #2e1065; color: #c4b5fd; }
+  .badge-cyan { background: #083344; color: #67e8f9; }
+  .badge-plan { background: #451a03; color: #fdba74; border: 1px dashed #d97706; }
+
+  .code { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 1rem; font-family: 'Consolas', monospace; font-size: 0.8rem; overflow-x: auto; white-space: pre; color: #a5b4fc; }
+
+  .divider { border: none; border-top: 1px solid #1e3a5f; margin: 2rem 0; }
+
+  .env-var { color: #fbbf24; }
+  .env-val { color: #86efac; }
+
+  .note { background: #1e293b; border-left: 3px solid #38bdf8; padding: 0.75rem 1rem; border-radius: 0 8px 8px 0; margin: 1rem 0; font-size: 0.85rem; color: #94a3b8; }
+  .note-warn { border-left-color: #d97706; }
+  .note-new { border-left-color: #059669; }
+
+  .vs-table td:first-child { font-weight: 600; color: #94a3b8; white-space: nowrap; }
+  .vs-naqel { color: #fca5a5; }
+  .vs-smsa { color: #67e8f9; }
+
+  .phase-badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; margin-left: 0.5rem; }
+  .phase-1 { background: #083344; color: #67e8f9; }
+  .phase-2 { background: #2e1065; color: #c4b5fd; }
+  .phase-3 { background: #052e16; color: #86efac; }
+
+  .step-num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: #0891b2; color: white; font-weight: 700; font-size: 0.85rem; margin-right: 0.5rem; flex-shrink: 0; }
+  .step { display: flex; align-items: flex-start; padding: 0.75rem 0; border-bottom: 1px solid #1e3a5f; }
+  .step:last-child { border-bottom: none; }
+  .step-content { flex: 1; }
+  .step-title { font-weight: 600; color: #f8fafc; }
+  .step-desc { color: #94a3b8; font-size: 0.85rem; margin-top: 0.25rem; }
+  .step-files { color: #a78bfa; font-family: 'Consolas', monospace; font-size: 0.8rem; margin-top: 0.25rem; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>bzrcMaster - SMSA Module <span class="badge badge-plan">PLANNED</span></h1>
+<p class="subtitle">Architecture & Integration Plan | Carrier: SMSA Express | v1.0 | Feb 2026</p>
+
+<!-- ============================================ -->
+<h2>1. Naqel vs SMSA — Comparison</h2>
+
+<div class="card">
+  <table class="vs-table">
+    <thead><tr><th style="width:25%;">Aspect</th><th>Naqel (Current)</th><th>SMSA (Planned)</th></tr></thead>
+    <tbody>
+      <tr><td>Protocol</td><td class="vs-naqel">REST / JSON</td><td class="vs-smsa">SOAP / XML</td></tr>
+      <tr><td>Auth</td><td class="vs-naqel">Bearer token (JWT, per-request)</td><td class="vs-smsa">passKey string (static, per-call)</td></tr>
+      <tr><td>Base URL</td><td class="vs-naqel">https://dev.gnteq.app</td><td class="vs-smsa">track.smsaexpress.com/SECOM/</td></tr>
+      <tr><td>City Codes</td><td class="vs-naqel">Numeric (Google Sheet, 4449 rows)</td><td class="vs-smsa">String names ("JEDDAH", "RIYADH")</td></tr>
+      <tr><td>Shipment Create</td><td class="vs-naqel">POST JSON &rarr; AWB + Label (base64)</td><td class="vs-smsa">SOAP addShipPDF &rarr; AWB + Label (base64)</td></tr>
+      <tr><td>Tracking</td><td class="vs-naqel">POST /Tracking &rarr; flat event list</td><td class="vs-smsa">SOAP getTrack &rarr; TrackDetails[] dataset</td></tr>
+      <tr><td>Label PDF</td><td class="vs-naqel">Inline (shipmentLabel in response)</td><td class="vs-smsa">Inline (addShipPDF) or separate (getPDF)</td></tr>
+      <tr><td>COD</td><td class="vs-naqel">cod / codCurrnecy (typo!)</td><td class="vs-smsa">codAmt parameter (0 = no COD)</td></tr>
+      <tr><td>Rate Calc</td><td class="vs-naqel">Not available</td><td class="vs-smsa">getShipCharges (pre-submit cost estimate)</td></tr>
+      <tr><td>Cancel</td><td class="vs-naqel">Not implemented</td><td class="vs-smsa">cancelShipment (with reason)</td></tr>
+      <tr><td>Return</td><td class="vs-naqel">Not implemented</td><td class="vs-smsa">stoShipment (Ship to Origin)</td></tr>
+      <tr><td>Status Updates</td><td class="vs-naqel">Manual poll via /Tracking</td><td class="vs-smsa">getShipUpdates (cursor-based polling)</td></tr>
+      <tr><td>Declared Value</td><td class="vs-naqel">Multiplier: 0.85 (from Google Sheet)</td><td class="vs-smsa">Multiplier: 1.0 (from Google Sheet)</td></tr>
+      <tr><td>Country Format</td><td class="vs-naqel">Shipper ISO3, Consignee ISO2</td><td class="vs-smsa">Both ISO2 (standard)</td></tr>
+      <tr><td>Python Library</td><td class="vs-naqel">httpx (REST)</td><td class="vs-smsa">zeep (SOAP) + lxml</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ============================================ -->
+<h2>2. System Architecture (Multi-Carrier)</h2>
+
+<h3>Carrier Router — The Key Change</h3>
+<div class="flow">
+  <div class="flow-box flow-fe">Frontend<br>Submit btn</div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box flow-api">FastAPI<br>/submit</div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box" style="background:#d97706;color:white;border:2px dashed #fbbf24;">Carrier<br>Router</div>
+  <span class="flow-arrow">&rarr;</span>
+  <div style="display:flex;flex-direction:column;gap:0.5rem;">
+    <div class="flow-box flow-naqel">GN Connect<span class="flow-label">carrier_code = naqel</span></div>
+    <div class="flow-box flow-smsa">SMSA SOAP<span class="flow-label">carrier_code = smsa</span></div>
+  </div>
+  <span class="flow-arrow">&rarr;</span>
+  <div class="flow-box flow-db">Store AWB<br>+ Label PDF</div>
+</div>
+
+<div class="note note-new">
+  <strong>Key principle:</strong> The <code>/shipments/{id}/submit</code> endpoint reads <code>carrier_code</code> from the shipment record
+  and routes to the correct carrier client. Same for <code>/shipments/{id}/track</code>. No frontend changes needed for carrier routing.
+</div>
+
+<h3>Full Data Flow (SMSA)</h3>
+<div class="flow">
+  <div>
+    <div class="flow-box flow-wc">WC Order<br>(bzrc_carrier=smsa)</div>
+    <span class="flow-label">master.bazaarica.com</span>
+  </div>
+  <span class="flow-arrow">&rarr;</span>
+  <div>
+    <div class="flow-box flow-fe">Orders Page<br>Create Shipment</div>
+    <span class="flow-label">hero.bazaarica.com</span>
+  </div>
+  <span class="flow-arrow">&rarr;</span>
+  <div>
+    <div class="flow-box flow-api">FastAPI<br>POST /shipments/</div>
+    <span class="flow-label">carrier_code = smsa</span>
+  </div>
+  <span class="flow-arrow">&rarr;</span>
+  <div>
+    <div class="flow-box flow-api">FastAPI<br>POST /submit</div>
+    <span class="flow-label">Router &rarr; SMSA</span>
+  </div>
+  <span class="flow-arrow">&rarr;</span>
+  <div>
+    <div class="flow-box flow-smsa">SMSA SOAP<br>addShipPDF</div>
+    <span class="flow-label">track.smsaexpress.com</span>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<h2>3. SMSA SOAP API</h2>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Connection</h3>
+    <table>
+      <tbody>
+        <tr><td class="col-name">Protocol</td><td class="col-type">SOAP 1.1 / XML</td></tr>
+        <tr><td class="col-name">Domestic URL</td><td class="env-val" style="font-size:0.8rem;">http://track.smsaexpress.com/SECOM/SMSAwebService.asmx</td></tr>
+        <tr><td class="col-name">Intl URL</td><td class="env-val" style="font-size:0.8rem;">http://track.smsaexpress.com/SECOM/SMSAwebServiceIntl.asmx</td></tr>
+        <tr><td class="col-name">WSDL</td><td class="env-val" style="font-size:0.8rem;">...SMSAwebService.asmx?WSDL</td></tr>
+        <tr><td class="col-name">Auth</td><td class="env-val">passKey string (static)</td></tr>
+        <tr><td class="col-name">Test Key</td><td class="env-val">Testing0 (read-only, no create/track)</td></tr>
+        <tr><td class="col-name">Production Key</td><td class="env-val">Contact: fsaid@smsaexpress.com</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>Shipment Types</h3>
+    <table>
+      <tbody>
+        <tr><td class="col-name">DLV</td><td>Standard delivery (most common)</td></tr>
+        <tr><td class="col-name">VAL</td><td>Value shipment (high-value items)</td></tr>
+        <tr><td class="col-name">HAL</td><td>Hold at location (pickup from retail center)</td></tr>
+        <tr><td class="col-name">BLT</td><td>Bilateral / special handling</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h3>SMSA API Methods (25 total — we'll use 8)</h3>
+  <table>
+    <thead><tr><th>Category</th><th>Method</th><th>We Use?</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="2" class="col-name" style="color:#059669;">Create</td>
+        <td class="col-type">addShipPDF</td><td><span class="badge badge-green">YES</span></td>
+        <td>Create shipment &rarr; AWB + base64 PDF label in one call</td>
+      </tr>
+      <tr>
+        <td class="col-type">addShipMPS</td><td><span class="badge badge-yellow">FUTURE</span></td>
+        <td>Multi-piece shipment (multiple packages)</td>
+      </tr>
+
+      <tr><td rowspan="3" class="col-name" style="color:#2563eb;">Track</td>
+        <td class="col-type">getTrack</td><td><span class="badge badge-green">YES</span></td>
+        <td>Full tracking history (event list with date/location)</td>
+      </tr>
+      <tr>
+        <td class="col-type">getStatus</td><td><span class="badge badge-green">YES</span></td>
+        <td>Quick current status string</td>
+      </tr>
+      <tr>
+        <td class="col-type">getShipUpdates</td><td><span class="badge badge-green">YES</span></td>
+        <td>Incremental poll (cursor-based, for background poller)</td>
+      </tr>
+
+      <tr><td class="col-name" style="color:#d97706;">Label</td>
+        <td class="col-type">getPDF</td><td><span class="badge badge-green">YES</span></td>
+        <td>Re-download label PDF for existing AWB</td>
+      </tr>
+
+      <tr><td class="col-name" style="color:#7c3aed;">Rate</td>
+        <td class="col-type">getShipCharges</td><td><span class="badge badge-green">YES</span></td>
+        <td>Calculate shipping cost before creating</td>
+      </tr>
+
+      <tr><td class="col-name" style="color:#dc2626;">Cancel</td>
+        <td class="col-type">cancelShipment</td><td><span class="badge badge-green">YES</span></td>
+        <td>Cancel shipment with reason</td>
+      </tr>
+
+      <tr><td class="col-name" style="color:#0891b2;">Return</td>
+        <td class="col-type">stoShipment</td><td><span class="badge badge-yellow">FUTURE</span></td>
+        <td>Ship to Origin (reverse logistics after delivery)</td>
+      </tr>
+
+      <tr><td class="col-name" style="color:#64748b;">Cities</td>
+        <td class="col-type">getRTLCities</td><td><span class="badge badge-blue">CACHE</span></td>
+        <td>List all valid SMSA city names</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ============================================ -->
+<h2>4. SMSA SOAP Request/Response</h2>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>addShipPDF Request</h3>
+    <div class="code"><span style="color:#64748b;">&lt;!-- SOAP Envelope --&gt;</span>
+&lt;secom:addShipPDF&gt;
+  &lt;secom:passKey&gt;<span class="env-val">***</span>&lt;/secom:passKey&gt;
+  &lt;secom:refNo&gt;<span class="env-val">WOO-12345</span>&lt;/secom:refNo&gt;
+  &lt;secom:sentDate&gt;<span class="env-val">2026-02-23</span>&lt;/secom:sentDate&gt;
+  &lt;secom:idNo&gt;&lt;/secom:idNo&gt;
+  &lt;secom:cName&gt;<span class="env-val">John Doe</span>&lt;/secom:cName&gt;
+  &lt;secom:cntry&gt;<span class="env-val">SA</span>&lt;/secom:cntry&gt;
+  &lt;secom:cCity&gt;<span class="env-val">Jeddah</span>&lt;/secom:cCity&gt;
+  &lt;secom:cZip&gt;<span class="env-val">21577</span>&lt;/secom:cZip&gt;
+  &lt;secom:cMobile&gt;<span class="env-val">966501234567</span>&lt;/secom:cMobile&gt;
+  &lt;secom:cAddr1&gt;<span class="env-val">King Fahd Road</span>&lt;/secom:cAddr1&gt;
+  &lt;secom:cEmail&gt;<span class="env-val">john@example.com</span>&lt;/secom:cEmail&gt;
+  &lt;secom:shipType&gt;<span class="env-val">DLV</span>&lt;/secom:shipType&gt;
+  &lt;secom:PCs&gt;<span class="env-val">1</span>&lt;/secom:PCs&gt;
+  &lt;secom:weight&gt;<span class="env-val">2.5</span>&lt;/secom:weight&gt;
+  &lt;secom:itemDesc&gt;<span class="env-val">Electronics</span>&lt;/secom:itemDesc&gt;
+  &lt;secom:carrValue&gt;<span class="env-val">100</span>&lt;/secom:carrValue&gt;
+  &lt;secom:carrCurr&gt;<span class="env-val">SAR</span>&lt;/secom:carrCurr&gt;
+  &lt;secom:codAmt&gt;<span class="env-val">150</span>&lt;/secom:codAmt&gt;
+  &lt;secom:custVal&gt;<span class="env-val">100</span>&lt;/secom:custVal&gt;
+  &lt;secom:custCurr&gt;<span class="env-val">SAR</span>&lt;/secom:custCurr&gt;
+
+  <span style="color:#64748b;">&lt;!-- Shipper details --&gt;</span>
+  &lt;secom:sName&gt;<span class="env-val">Bazaarica</span>&lt;/secom:sName&gt;
+  &lt;secom:sContact&gt;<span class="env-val">Ops Team</span>&lt;/secom:sContact&gt;
+  &lt;secom:sAddr1&gt;<span class="env-val">Istanbul, Turkey</span>&lt;/secom:sAddr1&gt;
+  &lt;secom:sCity&gt;<span class="env-val">Istanbul</span>&lt;/secom:sCity&gt;
+  &lt;secom:sCntry&gt;<span class="env-val">TR</span>&lt;/secom:sCntry&gt;
+  &lt;secom:sPhone&gt;<span class="env-val">+90...</span>&lt;/secom:sPhone&gt;
+&lt;/secom:addShipPDF&gt;</div>
+  </div>
+
+  <div class="card">
+    <h3>addShipPDF Response</h3>
+    <div class="code">&lt;addShipPDFResponse&gt;
+  &lt;addShipPDFResult&gt;
+    <span style="color:#86efac;">&lt;!-- AWB number as string --&gt;</span>
+    290019315571
+  &lt;/addShipPDFResult&gt;
+  <span style="color:#86efac;">&lt;!-- Label PDF as base64 --&gt;</span>
+  &lt;aPDF&gt;JVBERi0xLjQN...&lt;/aPDF&gt;
+&lt;/addShipPDFResponse&gt;</div>
+
+    <h3 style="margin-top:1.5rem;">getTrack Response</h3>
+    <div class="code">&lt;getTrackResponse&gt;
+  &lt;getTrackResult&gt;
+    &lt;TrackDetailsList&gt;
+      &lt;TrackDetails&gt;
+        &lt;awbNo&gt;290019315571&lt;/awbNo&gt;
+        &lt;evtDate&gt;2026-02-23 10:15:00&lt;/evtDate&gt;
+        &lt;Activity&gt;Delivered&lt;/Activity&gt;
+        &lt;Details&gt;Package delivered&lt;/Details&gt;
+        &lt;Location&gt;Jeddah Hub&lt;/Location&gt;
+      &lt;/TrackDetails&gt;
+      &lt;TrackDetails&gt;
+        &lt;awbNo&gt;290019315571&lt;/awbNo&gt;
+        &lt;evtDate&gt;2026-02-22 08:00:00&lt;/evtDate&gt;
+        &lt;Activity&gt;Out For Delivery&lt;/Activity&gt;
+        &lt;Details&gt;With courier&lt;/Details&gt;
+        &lt;Location&gt;Jeddah Branch&lt;/Location&gt;
+      &lt;/TrackDetails&gt;
+    &lt;/TrackDetailsList&gt;
+  &lt;/getTrackResult&gt;
+&lt;/getTrackResponse&gt;</div>
+
+    <h3 style="margin-top:1.5rem;">getShipCharges Response</h3>
+    <div class="code">&lt;getShipChargesResult&gt;
+  &lt;RequestStatus&gt;Success&lt;/RequestStatus&gt;
+  &lt;ShipCharges&gt;45.50&lt;/ShipCharges&gt;
+  &lt;ShipChargesCurr&gt;SAR&lt;/ShipChargesCurr&gt;
+&lt;/getShipChargesResult&gt;</div>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<h2>5. Field Mapping: Our DB &rarr; SMSA</h2>
+
+<div class="card">
+  <table>
+    <thead><tr><th>Our Shipment Field</th><th>SMSA Parameter</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="col-name">woo_order_number</td><td class="col-type">refNo</td><td>Unique ref per day</td></tr>
+      <tr><td class="col-name">shipping_datetime</td><td class="col-type">sentDate</td><td>Date only (YYYY-MM-DD)</td></tr>
+      <tr><td class="col-name">consignee_person_name</td><td class="col-type">cName</td><td></td></tr>
+      <tr><td class="col-name">consignee_country_code</td><td class="col-type">cntry</td><td>ISO2 (same as ours)</td></tr>
+      <tr><td class="col-name">consignee_city</td><td class="col-type">cCity</td><td>String city name (not Naqel code!)</td></tr>
+      <tr><td class="col-name">consignee_post_code</td><td class="col-type">cZip</td><td></td></tr>
+      <tr><td class="col-name">consignee_cell_phone</td><td class="col-type">cMobile</td><td>9+ digits</td></tr>
+      <tr><td class="col-name">consignee_phone1</td><td class="col-type">cTel1</td><td></td></tr>
+      <tr><td class="col-name">consignee_line1</td><td class="col-type">cAddr1</td><td></td></tr>
+      <tr><td class="col-name">consignee_line2</td><td class="col-type">cAddr2</td><td></td></tr>
+      <tr><td class="col-name">consignee_email</td><td class="col-type">cEmail</td><td></td></tr>
+      <tr><td class="col-name">product_type</td><td class="col-type">shipType</td><td>DLV / VAL / HAL / BLT</td></tr>
+      <tr><td class="col-name">number_of_pieces</td><td class="col-type">PCs</td><td>Integer</td></tr>
+      <tr><td class="col-name">shipment_weight_value</td><td class="col-type">weight</td><td>KG</td></tr>
+      <tr><td class="col-name">description_of_goods</td><td class="col-type">itemDesc</td><td></td></tr>
+      <tr><td class="col-name">customs_declared_value</td><td class="col-type">carrValue / custVal</td><td>Both get same value</td></tr>
+      <tr><td class="col-name">customs_value_currency</td><td class="col-type">carrCurr / custCurr</td><td></td></tr>
+      <tr><td class="col-name">cod_amount</td><td class="col-type">codAmt</td><td>0 if not COD</td></tr>
+      <tr><td colspan="3" style="color:#64748b; font-size:0.75rem; padding-top:0.5rem;">-- Shipper (addShipPDF only) --</td></tr>
+      <tr><td class="col-name">shipper_company_name</td><td class="col-type">sName</td><td>Bazaarica</td></tr>
+      <tr><td class="col-name">shipper_person_name</td><td class="col-type">sContact</td><td></td></tr>
+      <tr><td class="col-name">shipper_line1</td><td class="col-type">sAddr1</td><td></td></tr>
+      <tr><td class="col-name">shipper_city</td><td class="col-type">sCity</td><td></td></tr>
+      <tr><td class="col-name">shipper_country_code</td><td class="col-type">sCntry</td><td>ISO2 (no conversion needed!)</td></tr>
+      <tr><td class="col-name">shipper_phone1</td><td class="col-type">sPhone</td><td></td></tr>
+    </tbody>
+  </table>
+  <div class="note note-new">
+    SMSA uses <strong>string city names</strong> (e.g. "Jeddah"), NOT numeric city codes.
+    This means the Naqel city code matching pipeline is <strong>not needed</strong> for SMSA.
+    The city name from WC order (after translation) can go directly into the SMSA request.
+  </div>
+</div>
+
+<!-- ============================================ -->
+<h2>6. Status Mapping: SMSA &rarr; Our System</h2>
+
+<div class="card">
+  <h3>SMSA Status Values &rarr; Internal Status</h3>
+  <table>
+    <thead><tr><th>SMSA Activity/Status</th><th>&rarr;</th><th>Our Status</th></tr></thead>
+    <tbody>
+      <tr><td class="col-name">Shipment Created / Picked Up / In Transit / Dispatched</td><td class="flow-arrow">&rarr;</td><td><span class="status-box status-transit">in_transit</span></td></tr>
+      <tr><td class="col-name">Out For Delivery</td><td class="flow-arrow">&rarr;</td><td><span class="status-box status-transit">in_transit</span></td></tr>
+      <tr><td class="col-name">Delivered</td><td class="flow-arrow">&rarr;</td><td><span class="status-box status-delivered">delivered</span></td></tr>
+      <tr><td class="col-name">Returned / Exception / Failed Delivery</td><td class="flow-arrow">&rarr;</td><td><span class="status-box status-failed">failed</span></td></tr>
+      <tr><td class="col-name">Cancelled</td><td class="flow-arrow">&rarr;</td><td><span class="status-box status-cancelled">cancelled</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin-top:1rem;">Extended Status Flow (with SMSA features)</h3>
+  <div class="status-flow">
+    <span class="status-box status-created">created</span>
+    <span class="status-arrow">&rarr;</span>
+    <span class="status-box status-submitted">submitted</span>
+    <span class="status-arrow">&rarr;</span>
+    <span class="status-box status-transit">in_transit</span>
+    <span class="status-arrow">&rarr;</span>
+    <span class="status-box status-delivered">delivered</span>
+  </div>
+  <div class="status-flow">
+    <span class="status-box status-submitted">submitted</span>
+    <span class="status-arrow">&rarr;</span>
+    <span class="status-box status-cancelled">cancelled</span>
+    <span class="badge badge-cyan" style="margin-left:0.5rem;">NEW: cancelShipment</span>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<h2>7. Implementation Plan (3 Phases)</h2>
+
+<div class="card" style="border-color:#0891b2;">
+  <h3>Phase 1: Backend Foundation + Shipment Creation <span class="phase-badge phase-1">Core</span></h3>
+  <div class="step">
+    <span class="step-num">1</span>
+    <div class="step-content">
+      <div class="step-title">Install zeep + lxml on server</div>
+      <div class="step-desc">Python SOAP client library for SMSA API calls. <code>pip install zeep lxml</code></div>
+      <div class="step-files">server/requirements.txt</div>
+    </div>
+  </div>
+  <div class="step">
+    <span class="step-num">2</span>
+    <div class="step-content">
+      <div class="step-title">Add SMSA config + env vars</div>
+      <div class="step-desc">SMSA_PASS_KEY, SMSA_API_URL (domestic/intl). Backend .env only.</div>
+      <div class="step-files">server/main.py, .env</div>
+    </div>
+  </div>
+  <div class="step">
+    <span class="step-num">3</span>
+    <div class="step-content">
+      <div class="step-title">Create SMSA SOAP client helper</div>
+      <div class="step-desc"><code>smsa_client()</code> — init zeep Client from WSDL URL. <code>call_smsa(method, **params)</code> — generic SOAP call wrapper with logging.</div>
+      <div class="step-files">server/main.py</div>
+    </div>
+  </div>
+  <div class="step">
+    <span class="step-num">4</span>
+    <div class="step-content">
+      <div class="step-title">Build SMSA payload mapper</div>
+      <div class="step-desc"><code>build_smsa_payload(shipment, items)</code> — maps our DB fields to SMSA addShipPDF parameters. City name string (not code), ISO2 country, codAmt, shipper details.</div>
+      <div class="step-files">server/main.py</div>
+    </div>
+  </div>
+  <div class="step">
+    <span class="step-num">5</span>
+    <div class="step-content">
+      <div class="step-title">Abstract submit endpoint (carrier router)</div>
+      <div class="step-desc">Modify <code>POST /shipments/{id}/submit</code>: check <code>shipment.carrier_code</code>, route to Naqel or SMSA. Extract current Naqel logic into <code>_submit_naqel()</code>, add <code>_submit_smsa()</code>.</div>
+      <div class="step-files">server/main.py</div>
+    </div>
+  </div>
+  <div class="step">
+    <span class="step-num">6</span>
+    <div class="step-content">
+      <div class="step-title">Parse SMSA response + store AWB/label</div>
+      <div class="step-desc">addShipPDF returns AWB string + base64 PDF. Parse XML response, store in same DB fields as Naqel.</div>
+      <div class="step-files">server/main.py</div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="border-color:#2e1065;">
+  <h3>Phase 2: Tracking + Rate Calculation <span class="phase-badge phase-2">Track</span></h3>
+  <div class="step">
+    <span class="step-num">7</span>
+    <div class="step-content">
+      <div class="step-title">SMSA tracking: parse getTrack response</div>
+      <div class="step-desc"><code>parse_smsa_tracking(xml_result)</code> — extract TrackDetails[] from XML DataSet response. Map Activity/Details/Location/evtDate to our tracking_events schema.</div>
+      <div class="step-files">server/main.py</div>
+    </div>
+  </div>
+  <div class="step">
+    <span class="step-num">8</span>
+    <div class="step-content">
+      <div class="step-title">Abstract track endpoint (carrier router)</div>
+      <div class="step-desc">Modify <code>POST /shipments/{id}/track</code>: route to GN Connect or SMSA getTrack. Events stored in same tracking_events table.</div>
+      <div class="step-files">server/main.py</div>
+    </div>
+  </div>
+  <div class="step">
+    <span class="step-num">9</span>
+    <div class="step-content">
+      <div class="step-title">SMSA incremental polling (getShipUpdates)</div>
+      <div class="step-desc">Background poller: store <code>smsa_last_row_id</code> as cursor. Poll new updates since last row. More efficient than per-AWB polling.</div>
+      <div class="step-files">server/main.py</div>
+    </div>
+  </div>
+  <div class="step">
+    <span class="step-num">10</span>
+    <div class="step-content">
+      <div class="step-title">Rate calculation endpoint</div>
+      <div class="step-desc">New: <code>POST /shipments/{id}/rate-check</code> — calls SMSA getShipCharges. Returns estimated cost before submit. Only for SMSA (Naqel has no rate API).</div>
+      <div class="step-files">server/main.py, new frontend API route, shipments page UI</div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="border-color:#052e16;">
+  <h3>Phase 3: Cancellation + Frontend Polish <span class="phase-badge phase-3">Extra</span></h3>
+  <div class="step">
+    <span class="step-num">11</span>
+    <div class="step-content">
+      <div class="step-title">Cancel shipment endpoint</div>
+      <div class="step-desc">New: <code>POST /shipments/{id}/cancel</code> — calls SMSA cancelShipment(awb, passkey, reason). Updates status to "cancelled".</div>
+      <div class="step-files">server/main.py, new frontend API route</div>
+    </div>
+  </div>
+  <div class="step">
+    <span class="step-num">12</span>
+    <div class="step-content">
+      <div class="step-title">Frontend: rate preview in detail dialog</div>
+      <div class="step-desc">Show estimated shipping cost before submit (SMSA only). "Estimate Cost" button &rarr; display SAR amount.</div>
+      <div class="step-files">src/app/(dashboard)/shipments/page.tsx</div>
+    </div>
+  </div>
+  <div class="step">
+    <span class="step-num">13</span>
+    <div class="step-content">
+      <div class="step-title">Frontend: cancel button on submitted shipments</div>
+      <div class="step-desc">Show "Cancel" button for submitted SMSA shipments (before in_transit). Confirmation dialog with reason.</div>
+      <div class="step-files">src/app/(dashboard)/shipments/page.tsx</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<h2>8. Backend Code Changes</h2>
+
+<div class="card">
+  <h3>server/main.py — New/Modified Functions</h3>
+  <table>
+    <thead><tr><th>Function</th><th>Type</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td class="col-name" style="color:#059669;">smsa_client()</td><td><span class="badge badge-cyan">NEW</span></td><td>Cached zeep Client from WSDL URL</td></tr>
+      <tr><td class="col-name" style="color:#059669;">call_smsa(method, **params)</td><td><span class="badge badge-cyan">NEW</span></td><td>Generic SOAP call with passKey injection + logging</td></tr>
+      <tr><td class="col-name" style="color:#059669;">build_smsa_payload(shipment, items)</td><td><span class="badge badge-cyan">NEW</span></td><td>Map DB shipment &rarr; SMSA addShipPDF params</td></tr>
+      <tr><td class="col-name" style="color:#059669;">parse_smsa_tracking(result)</td><td><span class="badge badge-cyan">NEW</span></td><td>Parse getTrack XML result &rarr; event list</td></tr>
+      <tr><td class="col-name" style="color:#059669;">SMSA_STATUS_MAP</td><td><span class="badge badge-cyan">NEW</span></td><td>SMSA Activity &rarr; internal status mapping</td></tr>
+      <tr><td class="col-name" style="color:#d97706;">submit_shipment_endpoint()</td><td><span class="badge badge-yellow">MODIFY</span></td><td>Add carrier router: if naqel &rarr; _submit_naqel(), if smsa &rarr; _submit_smsa()</td></tr>
+      <tr><td class="col-name" style="color:#d97706;">track_shipment_endpoint()</td><td><span class="badge badge-yellow">MODIFY</span></td><td>Add carrier router: if naqel &rarr; GN Connect, if smsa &rarr; getTrack</td></tr>
+      <tr><td class="col-name" style="color:#d97706;">poll_tracking_endpoint()</td><td><span class="badge badge-yellow">MODIFY</span></td><td>Poll both Naqel + SMSA shipments (different strategies)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ============================================ -->
+<h2>9. No DB Schema Changes Needed</h2>
+
+<div class="card">
+  <div class="note note-new">
+    <strong>Good news:</strong> The existing <code>shipments</code>, <code>shipment_items</code>, and <code>tracking_events</code> tables
+    already support SMSA. The <code>carrier_code</code> field differentiates carriers. AWB, label, payloads, tracking events
+    all fit the existing schema.
+  </div>
+  <table>
+    <thead><tr><th>Field</th><th>Naqel Value</th><th>SMSA Value</th></tr></thead>
+    <tbody>
+      <tr><td class="col-name">carrier_code</td><td>gn_connect</td><td>smsa</td></tr>
+      <tr><td class="col-name">customer_code</td><td>Naqel customer code</td><td>SMSA passKey</td></tr>
+      <tr><td class="col-name">branch_code</td><td>Naqel branch code</td><td>"" (not used by SMSA)</td></tr>
+      <tr><td class="col-name">airwaybill_number</td><td>GNTUPD00228...</td><td>290019315...</td></tr>
+      <tr><td class="col-name">label_base64</td><td>PDF from GN Connect</td><td>PDF from addShipPDF / getPDF</td></tr>
+      <tr><td class="col-name">carrier_request_payload</td><td>JSON (Naqel payload)</td><td>JSON (SMSA params serialized)</td></tr>
+      <tr><td class="col-name">carrier_response_payload</td><td>JSON (Naqel response)</td><td>JSON (SMSA result serialized)</td></tr>
+    </tbody>
+  </table>
+  <div class="note">
+    Optional future addition: <code>smsa_poll_row_id</code> (single integer) for getShipUpdates cursor.
+    Can be stored as a simple key-value in a config table or as a server-side global.
+  </div>
+</div>
+
+<!-- ============================================ -->
+<h2>10. Environment Variables (New)</h2>
+
+<div class="card">
+  <h3>Backend (.env) — additions</h3>
+  <div class="code"><span style="color:#64748b;"># --- SMSA Express ---</span>
+<span class="env-var">SMSA_PASS_KEY</span>=<span class="env-val">*** (from SMSA account manager)</span>
+<span class="env-var">SMSA_API_URL</span>=<span class="env-val">http://track.smsaexpress.com/SECOM/SMSAwebService.asmx</span>
+<span class="env-var">SMSA_API_URL_INTL</span>=<span class="env-val">http://track.smsaexpress.com/SECOM/SMSAwebServiceIntl.asmx</span></div>
+  <div class="note">
+    SMSA uses HTTP (not HTTPS) for their SOAP endpoint. This is their official URL.
+    The passKey parameter in every call provides authentication.
+  </div>
+</div>
+
+<!-- ============================================ -->
+<h2>11. File Changes Summary</h2>
+
+<div class="card">
+  <table>
+    <thead><tr><th>File</th><th>Action</th><th>Phase</th></tr></thead>
+    <tbody>
+      <tr><td class="col-name">server/main.py</td><td>SMSA client, payload builder, carrier router, tracking parser</td><td>P1 + P2</td></tr>
+      <tr><td class="col-name">server/requirements.txt</td><td>Add <code>zeep</code> + <code>lxml</code></td><td>P1</td></tr>
+      <tr><td class="col-name">.env (backend)</td><td>Add SMSA_PASS_KEY, SMSA_API_URL</td><td>P1</td></tr>
+      <tr><td class="col-name">src/app/api/shipments/[id]/cancel/route.ts</td><td><span class="badge badge-cyan">NEW</span> POST proxy</td><td>P3</td></tr>
+      <tr><td class="col-name">src/app/api/shipments/[id]/rate-check/route.ts</td><td><span class="badge badge-cyan">NEW</span> POST proxy</td><td>P2</td></tr>
+      <tr><td class="col-name">src/lib/api/shipping-client.ts</td><td>Add cancelShipment(), checkRate()</td><td>P2 + P3</td></tr>
+      <tr><td class="col-name">src/lib/api/shipping-types.ts</td><td>Add RateCheckResult, CancelResult</td><td>P2 + P3</td></tr>
+      <tr><td class="col-name">src/app/(dashboard)/shipments/page.tsx</td><td>Rate preview, cancel button</td><td>P2 + P3</td></tr>
+    </tbody>
+  </table>
+  <div class="note note-new">
+    <strong>Frontend impact is minimal.</strong> Shipment creation, tracking, and labels already work generically.
+    The backend carrier router handles the SMSA-specific logic transparently.
+    Only new features (rate check, cancel) need frontend changes.
+  </div>
+</div>
+
+<!-- ============================================ -->
+<h2>12. Testing Checklist</h2>
+
+<div class="card">
+  <table>
+    <thead><tr><th>#</th><th>Test</th><th>Expected Result</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Create shipment with carrier_code = smsa</td><td>Shipment in DB with carrier_code "smsa"</td></tr>
+      <tr><td>2</td><td>Submit SMSA shipment</td><td>SOAP call &rarr; AWB returned &rarr; label PDF stored</td></tr>
+      <tr><td>3</td><td>Track SMSA shipment</td><td>getTrack &rarr; events in timeline, status updated</td></tr>
+      <tr><td>4</td><td>Download label</td><td>Same /label endpoint works (base64 &rarr; PDF)</td></tr>
+      <tr><td>5</td><td>Rate check (SMSA only)</td><td>getShipCharges returns SAR amount</td></tr>
+      <tr><td>6</td><td>Cancel SMSA shipment</td><td>cancelShipment &rarr; status = "cancelled"</td></tr>
+      <tr><td>7</td><td>Background poller handles both carriers</td><td>Naqel via GN Connect, SMSA via getShipUpdates</td></tr>
+      <tr><td>8</td><td>Naqel still works after refactor</td><td>All existing Naqel functionality unchanged</td></tr>
+      <tr><td>9</td><td>npm run build passes</td><td>No TypeScript errors</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<hr class="divider">
+<p style="text-align:center; color:#475569; font-size:0.8rem; margin-top:2rem;">
+  bzrcMaster v1.0 | Module: SMSA Express (Plan) | Pending: SMSA passKey from account manager | Feb 2026
+</p>
+
+</div>
+</body>
+</html>

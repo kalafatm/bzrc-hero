@@ -130,6 +130,7 @@ class Shipment(Base):
     tracking_number = Column(Text, nullable=True)
     tracking_url = Column(Text, nullable=True)
     last_status_change_at = Column(DateTime(timezone=True), nullable=True)
+    last_tracked_at = Column(DateTime(timezone=True), nullable=True)
 
     # Consignee contact
     consignee_person_name = Column(Text, nullable=False)
@@ -187,10 +188,29 @@ class Shipment(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     items = relationship("ShipmentItem", back_populates="shipment", cascade="all, delete-orphan")
+    tracking_events = relationship("TrackingEvent", back_populates="shipment", cascade="all, delete-orphan", order_by="TrackingEvent.event_date.desc()")
 
 
 # Link back relationship
 ShipmentItem.shipment = relationship("Shipment", back_populates="items")
+
+
+class TrackingEvent(Base):
+    """Tracking timeline events from GN Connect."""
+    __tablename__ = "tracking_events"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    shipment_id = Column(BigInteger, ForeignKey("shipments.id", ondelete="CASCADE"), nullable=False, index=True)
+    airwaybill_number = Column(Text, nullable=False, index=True)
+    event_code = Column(Text, nullable=True)
+    event_description = Column(Text, nullable=True)
+    event_date = Column(DateTime(timezone=True), nullable=True)
+    event_location = Column(Text, nullable=True)
+    event_detail = Column(Text, nullable=True)
+    raw_event_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    shipment = relationship("Shipment", back_populates="tracking_events")
 
 
 class ExchangeRate(Base):
@@ -444,6 +464,168 @@ async def get_naqel_token() -> str:
         if not token:
             raise HTTPException(status_code=502, detail="No access_token in Naqel auth response")
         return token
+
+
+async def track_shipment_gn(airwaybill: str, customer_code: str, branch_code: str, token: str) -> dict:
+    """Call GN Connect Tracking API for a single AWB."""
+    url = f"{NAQEL_BASE_URL}/api/gnconnect/Tracking"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(url, json={
+            "airwaybill": airwaybill,
+            "customerCode": customer_code,
+            "branchCode": branch_code,
+        }, headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        })
+
+    import logging
+    logger = logging.getLogger("uvicorn.error")
+    logger.info(f"GN Connect tracking HTTP {resp.status_code} for AWB {airwaybill}: {resp.text[:2000]}")
+
+    if resp.status_code not in (200, 201):
+        raise HTTPException(
+            status_code=502,
+            detail=f"GN Connect tracking failed: HTTP {resp.status_code} - {resp.text[:500]}"
+        )
+    return resp.json()
+
+
+# GN Connect status → internal status mapping
+GN_STATUS_MAP = {
+    "Delivered": "delivered",
+    "InTransit": "in_transit",
+    "In Transit": "in_transit",
+    "PickedUp": "in_transit",
+    "Picked Up": "in_transit",
+    "Out For Delivery": "in_transit",
+    "OutForDelivery": "in_transit",
+    "Returned": "failed",
+    "Exception": "failed",
+    "Cancelled": "cancelled",
+}
+
+
+def parse_tracking_response(raw) -> tuple:
+    """
+    Parse GN Connect tracking response into (new_status, status_message, events_list).
+    Flexible: handles response as dict, list, or nested structures.
+    Returns: (status_str | None, message_str | None, list_of_event_dicts)
+    """
+    import logging
+    logger = logging.getLogger("uvicorn.error")
+    logger.info(f"Tracking raw response type={type(raw).__name__}: {str(raw)[:2000]}")
+
+    events = []
+    new_status = None
+    status_msg = None
+
+    # If response is a list, each item may be a tracking record
+    if isinstance(raw, list):
+        raw_events = raw
+    elif isinstance(raw, dict):
+        # Extract events array from various possible locations
+        data = raw.get("data")
+        raw_events = (
+            raw.get("events") or raw.get("Events") or
+            raw.get("trackingDetails") or raw.get("TrackingDetails") or
+            raw.get("trackingHistory") or raw.get("TrackingHistory") or
+            (data if isinstance(data, list) else None) or
+            (data.get("events") if isinstance(data, dict) else None) or
+            (data.get("trackingDetails") if isinstance(data, dict) else None) or
+            []
+        )
+    else:
+        raw_events = []
+
+    if isinstance(raw_events, list):
+        for evt in raw_events:
+            if not isinstance(evt, dict):
+                continue
+            # Build location from eventCity + eventCountry
+            loc_parts = [
+                p for p in [
+                    evt.get("eventCity") or evt.get("eventCityAr"),
+                    evt.get("eventCountry")
+                ] if p
+            ]
+            location = (
+                evt.get("eventLocation") or evt.get("EventLocation") or
+                evt.get("location") or evt.get("Location") or
+                evt.get("activityLocation") or evt.get("ActivityLocation") or
+                (", ".join(loc_parts) if loc_parts else None)
+            )
+            events.append({
+                "event_code": evt.get("eventCode") or evt.get("EventCode") or evt.get("code") or evt.get("Code") or evt.get("activityCode"),
+                "event_description": evt.get("eventName") or evt.get("event") or evt.get("eventDescription") or evt.get("EventDescription") or evt.get("description") or evt.get("Description") or evt.get("activity") or evt.get("activityDescription"),
+                "event_date": evt.get("actionDate") or evt.get("eventDate") or evt.get("EventDate") or evt.get("date") or evt.get("Date") or evt.get("activityDate") or evt.get("timestamp"),
+                "event_location": location,
+                "event_detail": evt.get("notes") or evt.get("eventDetail") or evt.get("EventDetail") or evt.get("detail") or evt.get("Detail") or evt.get("comments") or None,
+                "raw": evt,
+            })
+
+    # Top-level status (only if raw is dict)
+    if isinstance(raw, dict):
+        top_status = raw.get("status") or raw.get("Status") or raw.get("currentStatus") or raw.get("CurrentStatus") or raw.get("shipmentStatus") or raw.get("ShipmentStatus")
+        if top_status and isinstance(top_status, str):
+            new_status = GN_STATUS_MAP.get(top_status)
+            status_msg = top_status
+
+    # If no top-level status, derive from latest event
+    if not new_status and events:
+        latest_desc = events[0].get("event_description") or events[0].get("event_code") or ""
+        for key, mapped in GN_STATUS_MAP.items():
+            if key.lower() in latest_desc.lower():
+                new_status = mapped
+                break
+        if not new_status:
+            new_status = "in_transit"
+        status_msg = latest_desc or status_msg
+
+    return (new_status, status_msg, events)
+
+
+def _normalize_date_key(d) -> str:
+    """Normalize a date to UTC ISO string for dedup comparison."""
+    if d is None:
+        return ""
+    try:
+        if isinstance(d, datetime):
+            dt = d
+        else:
+            dt = datetime.fromisoformat(str(d).strip())
+        # Convert to UTC for consistent comparison
+        if dt.tzinfo is not None:
+            from datetime import timezone
+            dt = dt.astimezone(timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    except Exception:
+        return str(d)
+
+
+def _store_tracking_events(db: Session, shipment_id: int, awb: str, parsed_events: list) -> int:
+    """Store new tracking events, dedup by (event_code, event_date). Returns count of new events."""
+    existing_keys = {
+        (e.event_code, _normalize_date_key(e.event_date))
+        for e in db.query(TrackingEvent).filter(TrackingEvent.shipment_id == shipment_id).all()
+    }
+    new_count = 0
+    for evt in parsed_events:
+        key = (evt["event_code"], _normalize_date_key(evt.get("event_date")))
+        if key not in existing_keys:
+            db.add(TrackingEvent(
+                shipment_id=shipment_id,
+                airwaybill_number=awb,
+                event_code=evt["event_code"],
+                event_description=evt["event_description"],
+                event_date=evt.get("event_date"),
+                event_location=evt.get("event_location"),
+                event_detail=evt.get("event_detail"),
+                raw_event_data=evt.get("raw"),
+            ))
+            existing_keys.add(key)
+            new_count += 1
+    return new_count
 
 
 def build_naqel_payload(shipment: Shipment, items: list) -> dict:
@@ -758,6 +940,39 @@ class ShipmentRead(ShipmentBase):
         }
 
 
+# ---------- Tracking Pydantic schemas ----------
+
+
+class TrackingEventRead(BaseModel):
+    id: int
+    shipment_id: int
+    airwaybill_number: str
+    event_code: Optional[str] = None
+    event_description: Optional[str] = None
+    event_date: Optional[datetime] = None
+    event_location: Optional[str] = None
+    event_detail: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class TrackingResponse(BaseModel):
+    shipment_id: int
+    airwaybill_number: str
+    current_status: str
+    status_message: Optional[str] = None
+    events: List[TrackingEventRead] = []
+    last_tracked_at: Optional[datetime] = None
+
+
+class BulkTrackingResult(BaseModel):
+    total_tracked: int
+    updated: int
+    errors: int
+    details: List[dict] = []
+
+
 # ---------- FastAPI app and routes ----------
 
 
@@ -1028,6 +1243,211 @@ def get_label_endpoint(shipment_id: int, db: Session = Depends(get_db)):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ---------- Tracking endpoints ----------
+
+
+@router.post("/tracking/poll", response_model=BulkTrackingResult)
+async def bulk_track_endpoint(db: Session = Depends(get_db)):
+    """Poll tracking status for all submitted/in_transit shipments."""
+    trackable = db.query(Shipment).filter(
+        Shipment.status.in_(["submitted", "in_transit"]),
+        Shipment.airwaybill_number.isnot(None),
+    ).all()
+
+    if not trackable:
+        return BulkTrackingResult(total_tracked=0, updated=0, errors=0)
+
+    token = await get_naqel_token()
+    updated = 0
+    errors = 0
+    details = []
+
+    for shipment in trackable:
+        try:
+            raw = await track_shipment_gn(
+                shipment.airwaybill_number,
+                shipment.customer_code,
+                shipment.branch_code,
+                token,
+            )
+            new_status, status_msg, parsed_events = parse_tracking_response(raw)
+            new_count = _store_tracking_events(db, shipment.id, shipment.airwaybill_number, parsed_events)
+
+            if new_status and new_status != shipment.status:
+                shipment.status = new_status
+                shipment.status_message = status_msg
+                shipment.last_status_change_at = datetime.utcnow()
+                updated += 1
+
+            shipment.last_tracked_at = datetime.utcnow()
+            details.append({
+                "shipment_id": shipment.id,
+                "awb": shipment.airwaybill_number,
+                "new_events": new_count,
+                "status": shipment.status,
+            })
+        except Exception as e:
+            errors += 1
+            details.append({
+                "shipment_id": shipment.id,
+                "awb": shipment.airwaybill_number,
+                "error": str(e)[:200],
+            })
+            logger.warning(f"Track {shipment.airwaybill_number} failed: {e}")
+
+    db.commit()
+    return BulkTrackingResult(total_tracked=len(trackable), updated=updated, errors=errors, details=details)
+
+
+@router.post("/{shipment_id}/track", response_model=TrackingResponse)
+async def track_shipment_endpoint(shipment_id: int, db: Session = Depends(get_db)):
+    """Track a single shipment via GN Connect API."""
+    shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+    if not shipment:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    if not shipment.airwaybill_number:
+        raise HTTPException(status_code=400, detail="Shipment has no AWB — cannot track")
+
+    # For terminal statuses, just return cached events
+    if shipment.status not in ("submitted", "in_transit"):
+        existing = (
+            db.query(TrackingEvent)
+            .filter(TrackingEvent.shipment_id == shipment_id)
+            .order_by(TrackingEvent.event_date.desc())
+            .all()
+        )
+        return TrackingResponse(
+            shipment_id=shipment.id,
+            airwaybill_number=shipment.airwaybill_number,
+            current_status=shipment.status,
+            status_message=shipment.status_message,
+            events=[TrackingEventRead.model_validate(e) for e in existing],
+            last_tracked_at=shipment.last_tracked_at,
+        )
+
+    # Call GN Connect
+    token = await get_naqel_token()
+    raw = await track_shipment_gn(
+        shipment.airwaybill_number, shipment.customer_code, shipment.branch_code, token,
+    )
+
+    new_status, status_msg, parsed_events = parse_tracking_response(raw)
+    _store_tracking_events(db, shipment.id, shipment.airwaybill_number, parsed_events)
+
+    # Update status if changed
+    if new_status and new_status != shipment.status:
+        shipment.status = new_status
+        shipment.status_message = status_msg
+        shipment.last_status_change_at = datetime.utcnow()
+
+    shipment.last_tracked_at = datetime.utcnow()
+    db.commit()
+
+    all_events = (
+        db.query(TrackingEvent)
+        .filter(TrackingEvent.shipment_id == shipment_id)
+        .order_by(TrackingEvent.event_date.desc())
+        .all()
+    )
+
+    return TrackingResponse(
+        shipment_id=shipment.id,
+        airwaybill_number=shipment.airwaybill_number,
+        current_status=shipment.status,
+        status_message=shipment.status_message,
+        events=[TrackingEventRead.model_validate(e) for e in all_events],
+        last_tracked_at=shipment.last_tracked_at,
+    )
+
+
+@router.get("/{shipment_id}/tracking-events", response_model=List[TrackingEventRead])
+def get_tracking_events_endpoint(shipment_id: int, db: Session = Depends(get_db)):
+    """Get cached tracking events (no external API call)."""
+    shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+    if not shipment:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    events = (
+        db.query(TrackingEvent)
+        .filter(TrackingEvent.shipment_id == shipment_id)
+        .order_by(TrackingEvent.event_date.desc())
+        .all()
+    )
+    return events
+
+
+# ---------- Background tracking poller (3-hour interval) ----------
+
+import asyncio
+
+TRACKING_POLL_INTERVAL = 3 * 60 * 60  # 3 hours
+_polling_task: Optional[asyncio.Task] = None
+
+
+async def tracking_poller():
+    """Background task: poll GN Connect tracking every 3 hours."""
+    while True:
+        await asyncio.sleep(TRACKING_POLL_INTERVAL)
+        try:
+            logger.info("Auto-tracking poll starting...")
+            db = SessionLocal()
+            try:
+                trackable = db.query(Shipment).filter(
+                    Shipment.status.in_(["submitted", "in_transit"]),
+                    Shipment.airwaybill_number.isnot(None),
+                ).all()
+
+                if not trackable:
+                    logger.info("No trackable shipments found")
+                    continue
+
+                token = await get_naqel_token()
+                updated_count = 0
+
+                for shipment in trackable:
+                    try:
+                        raw = await track_shipment_gn(
+                            shipment.airwaybill_number,
+                            shipment.customer_code,
+                            shipment.branch_code,
+                            token,
+                        )
+                        new_status, status_msg, parsed_events = parse_tracking_response(raw)
+                        _store_tracking_events(db, shipment.id, shipment.airwaybill_number, parsed_events)
+
+                        if new_status and new_status != shipment.status:
+                            shipment.status = new_status
+                            shipment.status_message = status_msg
+                            shipment.last_status_change_at = datetime.utcnow()
+                            updated_count += 1
+
+                        shipment.last_tracked_at = datetime.utcnow()
+                    except Exception as e:
+                        logger.warning(f"Auto-track {shipment.airwaybill_number}: {e}")
+
+                db.commit()
+                logger.info(f"Auto-tracking poll done: {len(trackable)} checked, {updated_count} updated")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Auto-tracking poll error: {e}")
+
+
+@app.on_event("startup")
+async def startup_event():
+    global _polling_task
+    _polling_task = asyncio.create_task(tracking_poller())
+    logger.info("Tracking background poller started (3h interval)")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global _polling_task
+    if _polling_task:
+        _polling_task.cancel()
 
 
 # ---------- Exchange Rate endpoints ----------

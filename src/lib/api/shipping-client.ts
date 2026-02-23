@@ -2,6 +2,8 @@ import type {
   ShipmentCreate,
   ShipmentRead,
   ShipmentListParams,
+  TrackingResponse,
+  BulkTrackingResult,
 } from "./shipping-types";
 
 const SHIPPING_API_URL =
@@ -85,6 +87,24 @@ export async function updateShipment(
 
 export async function submitShipment(id: number): Promise<ShipmentRead> {
   return request<ShipmentRead>(`/shipments/${id}/submit`, {
+    method: "POST",
+  });
+}
+
+// ── Tracking ─────────────────────────────────────────────────
+
+export async function trackShipment(id: number): Promise<TrackingResponse> {
+  return request<TrackingResponse>(`/shipments/${id}/track`, {
+    method: "POST",
+  });
+}
+
+export async function getTrackingEvents(id: number): Promise<TrackingResponse> {
+  return request<TrackingResponse>(`/shipments/${id}/tracking-events`);
+}
+
+export async function pollAllTracking(): Promise<BulkTrackingResult> {
+  return request<BulkTrackingResult>(`/shipments/tracking/poll`, {
     method: "POST",
   });
 }
