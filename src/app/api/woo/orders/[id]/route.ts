@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOrder, updateOrder } from "@/lib/api/woo-client";
+import { translateWooOrder } from "@/lib/api/gemini";
 
 /**
  * GET /api/woo/orders/[id] — get single WC order
@@ -11,7 +12,8 @@ export async function GET(
   try {
     const { id } = await params;
     const order = await getOrder(parseInt(id, 10));
-    return NextResponse.json({ order });
+    const translated = await translateWooOrder(order);
+    return NextResponse.json({ order: translated });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to get order";
     return NextResponse.json({ error: msg }, { status: 500 });

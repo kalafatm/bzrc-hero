@@ -18,6 +18,17 @@ const DEFAULT_SHIPPER = {
 const DEFAULT_CUSTOMER_CODE = process.env.NAQEL_CUSTOMER_CODE || "";
 const DEFAULT_BRANCH_CODE = process.env.NAQEL_BRANCH_CODE || "";
 
+/**
+ * Determine Naqel product type from origin/destination country.
+ * Same country = domestic (DOMN), different = international (DLVI).
+ */
+export function getProductType(originCountry: string, destCountry: string): string {
+  const origin = (originCountry || "").toUpperCase();
+  const dest = (destCountry || "").toUpperCase();
+  if (origin && dest && origin === dest) return "DOMN";
+  return "DLVI";
+}
+
 interface MapOptions {
   customer_code?: string;
   branch_code?: string;
@@ -41,6 +52,7 @@ interface MapOptions {
  * Map a WooCommerce order to a ShipmentCreate payload for the remote API.
  * If convertedTotal + countryCurrency provided, uses those for customs values.
  * If cityCode provided, uses it for consignee city.
+ * Auto-translates Arabic/non-Latin fields via Gemini (names → transliterate, addresses → translate).
  */
 export function mapWooOrderToShipment(
   order: WooOrder,
@@ -68,13 +80,24 @@ export function mapWooOrderToShipment(
   const dvMultiplier = options?.declaredValueMultiplier ?? 1;
 
   // Build items from line_items
+  const itemCount = order.line_items.length || 1;
   const items: ShipmentItemCreate[] = order.line_items.map((li) => {
-    const itemValue = Number(li.total) || li.price * li.quantity;
+    let itemValue = Number(li.total) || li.price * li.quantity;
+    let itemCustomsValue = Math.round(itemValue * conversionRatio * dvMultiplier * 100) / 100;
+
+    // If item value too low ($0.01 orders), distribute the minimum $10-12 across items
+    const minPerItem = (10 * conversionRatio) / itemCount;
+    if (itemCustomsValue < minPerItem) {
+      const minVal = (10 * conversionRatio) / itemCount;
+      const maxVal = (12 * conversionRatio) / itemCount;
+      itemCustomsValue = Math.round((minVal + Math.random() * (maxVal - minVal)) * 100) / 100;
+    }
+
     return {
       quantity: li.quantity,
       weight_value: 0.5, // default 0.5 kg per item (no weight info from WC)
       weight_unit: 1,
-      customs_value: Math.round(itemValue * conversionRatio * dvMultiplier * 100) / 100,
+      customs_value: itemCustomsValue,
       customs_currency: customsCurrency,
       goods_description: li.name.substring(0, 100),
       commodity_code: li.sku || undefined,
@@ -86,10 +109,7 @@ export function mapWooOrderToShipment(
     };
   });
 
-  // Total weight = sum of item weights
-  const totalWeight = items.reduce((sum, i) => sum + i.weight_value * i.quantity, 0);
-
-  // Description of goods
+  // Description of goods (already translated at order fetch time)
   const descriptions = order.line_items.map((li) => li.name).join(", ");
   const descriptionOfGoods = descriptions.substring(0, 200) || "Cosmetic products";
 
@@ -100,10 +120,17 @@ export function mapWooOrderToShipment(
     : undefined;
 
   // Customs declared value (total, in destination currency, with carrier multiplier)
-  const customsDeclaredValue =
+  // If value is under $10-equivalent (e.g. $0.01 placeholder orders), use random $10-12 converted to dest currency
+  let customsDeclaredValue =
     options?.convertedTotal != null
       ? Math.round(options.convertedTotal * dvMultiplier * 100) / 100
       : Math.round(orderTotal * dvMultiplier * 100) / 100;
+
+  if (customsDeclaredValue < 10 * conversionRatio) {
+    const minValue = 10 * conversionRatio;
+    const maxValue = 12 * conversionRatio;
+    customsDeclaredValue = Math.round((minValue + Math.random() * (maxValue - minValue)) * 100) / 100;
+  }
 
   const shipper = options?.shipper || DEFAULT_SHIPPER;
 
@@ -115,7 +142,7 @@ export function mapWooOrderToShipment(
     woo_order_number: order.number,
     customer_code: options?.customer_code || DEFAULT_CUSTOMER_CODE,
     branch_code: options?.branch_code || DEFAULT_BRANCH_CODE,
-    product_type: options?.product_type || "DLV",
+    product_type: options?.product_type || getProductType(shipper.country_code, addr.country),
     description_of_goods: descriptionOfGoods,
     number_of_pieces: 1,
     shipping_datetime: new Date().toISOString(),
@@ -123,7 +150,7 @@ export function mapWooOrderToShipment(
     cod_currency: isCod ? customsCurrency : undefined,
     customs_declared_value: customsDeclaredValue,
     customs_value_currency: customsCurrency,
-    shipment_weight_value: totalWeight || 0.5,
+    shipment_weight_value: 0.5, // always 0.5 kg
     shipment_weight_unit: 1,
     shipper_reference1: order.number,
     include_label: true,

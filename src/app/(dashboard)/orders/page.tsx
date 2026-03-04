@@ -44,6 +44,11 @@ import {
   Download,
   Check,
   AlertTriangle,
+  Rocket,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  SkipForward,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────
@@ -275,6 +280,14 @@ export default function OrdersPage() {
 
   const [creating, setCreating] = useState(false);
 
+  // Bulk submit state
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
+  const [bulkResults, setBulkResults] = useState<{
+    summary: { total: number; success: number; skipped: number; errors: number };
+    results: { orderId: number; orderNumber: string; status: string; shipmentId?: number; awb?: string; error?: string }[];
+  } | null>(null);
+  const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
+
   // Shipment existence tracking
   const [orderShipmentMap, setOrderShipmentMap] = useState<Record<number, string>>({}); // orderId -> shipment status
 
@@ -328,10 +341,43 @@ export default function OrdersPage() {
     }
   };
 
-  // ── Fetch Orders (manual sync only) ──────────────────────
+  // ── Orders cache (sessionStorage, per filter+page) ───────
+  const cacheKey = (filter: string, p: number) => `bzrc_orders_${filter}_p${p}`;
+
+  const saveToCache = (filter: string, p: number, data: { orders: WooOrder[]; totalPages: number; total: number }) => {
+    try {
+      sessionStorage.setItem(cacheKey(filter, p), JSON.stringify({ ...data, ts: Date.now() }));
+    } catch { /* storage full — ignore */ }
+  };
+
+  const loadFromCache = (filter: string, p: number): { orders: WooOrder[]; totalPages: number; total: number } | null => {
+    try {
+      const raw = sessionStorage.getItem(cacheKey(filter, p));
+      if (!raw) return null;
+      const cached = JSON.parse(raw);
+      if (Date.now() - cached.ts > 5 * 60 * 1000) return null;
+      return cached;
+    } catch { return null; }
+  };
+
+  // ── Fetch Orders ────────────────────────────────────────
 
   const fetchOrders = useCallback(
-    async (p: number) => {
+    async (p: number, forceRefresh = false) => {
+      // Check cache first (unless forced refresh)
+      if (!forceRefresh) {
+        const cached = loadFromCache(statusFilter, p);
+        if (cached) {
+          setOrders(cached.orders);
+          setTotalPages(cached.totalPages);
+          setTotal(cached.total);
+          setPage(p);
+          setLastSynced("cached");
+          checkShipmentsForOrders();
+          return;
+        }
+      }
+
       setLoading(true);
       try {
         const params = new URLSearchParams({
@@ -352,6 +398,13 @@ export default function OrdersPage() {
           setPage(p);
           setLastSynced(new Date().toLocaleTimeString());
 
+          // Save to cache
+          saveToCache(statusFilter, p, {
+            orders: fetchedOrders,
+            totalPages: json.totalPages || 1,
+            total: json.total || 0,
+          });
+
           // Check which orders already have shipments
           checkShipmentsForOrders();
         }
@@ -363,17 +416,17 @@ export default function OrdersPage() {
     [statusFilter]
   );
 
-  // Auto-sync once on first mount
+  // Load from cache or fetch on first mount
   const initialSyncDone = useRef(false);
   useEffect(() => {
     if (!initialSyncDone.current) {
       initialSyncDone.current = true;
-      fetchOrders(1);
+      fetchOrders(1); // will use cache if available
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-fetch when filter changes IF we already synced
+  // Re-fetch when filter changes (use cache if available, else fetch)
   useEffect(() => {
     if (lastSynced) {
       fetchOrders(1);
@@ -664,18 +717,90 @@ export default function OrdersPage() {
       if (json.error) {
         toast.error(json.error);
       } else {
-        toast.success(`Shipment #${json.shipment.id} created`);
-        // Update the shipment map so the order row shows the indicator
-        setOrderShipmentMap((prev) => ({
-          ...prev,
-          [detailOrder.id]: json.shipment.status || "created",
-        }));
+        const shipmentId = json.shipment.id;
+        toast.success(`Shipment #${shipmentId} created — submitting to carrier...`);
+
+        // Auto-submit to carrier
+        try {
+          const submitRes = await fetch(`/api/shipments/${shipmentId}/submit`, {
+            method: "POST",
+          });
+          const submitJson = await submitRes.json();
+          if (submitJson.error) {
+            toast.error(`Submit failed: ${submitJson.error}`);
+            setOrderShipmentMap((prev) => ({ ...prev, [detailOrder.id]: "submit_failed" }));
+          } else {
+            const awb = submitJson.shipment?.airwaybill_number || "";
+            toast.success(awb ? `Submitted! AWB: ${awb}` : "Submitted to carrier!");
+            setOrderShipmentMap((prev) => ({
+              ...prev,
+              [detailOrder.id]: submitJson.shipment?.status || "submitted",
+            }));
+          }
+        } catch {
+          toast.error("Shipment created but submit to carrier failed");
+          setOrderShipmentMap((prev) => ({ ...prev, [detailOrder.id]: "created" }));
+        }
+
         setDetailOpen(false);
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed");
     }
     setCreating(false);
+  };
+
+  // ── Bulk Submit ─────────────────────────────────────────
+
+  const getEligibleOrders = useCallback(() => {
+    return orders.filter((o) => {
+      const carrier = getCarrierFromMeta(o.meta_data);
+      const hasShipment = !!orderShipmentMap[o.id];
+      const routeValid = !exitDataLoaded || isRouteValid(o, validDestinations);
+      return carrier && !hasShipment && routeValid;
+    });
+  }, [orders, orderShipmentMap, exitDataLoaded, validDestinations]);
+
+  const handleBulkSubmit = async () => {
+    const eligible = getEligibleOrders();
+    if (eligible.length === 0) {
+      toast.error("No eligible orders to submit");
+      return;
+    }
+
+    setBulkSubmitting(true);
+    setBulkResults(null);
+    setBulkDialogOpen(true);
+
+    try {
+      const res = await fetch("/api/shipments/bulk-submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderIds: eligible.map((o) => o.id) }),
+      });
+      const json = await res.json();
+      if (json.error) {
+        toast.error(json.error);
+      } else {
+        setBulkResults(json);
+        // Update shipment map for successful results
+        const newMap = { ...orderShipmentMap };
+        for (const r of json.results) {
+          if (r.status === "success" && r.shipmentId) {
+            newMap[r.orderId] = "submitted";
+          } else if (r.status === "skipped" && r.shipmentId) {
+            newMap[r.orderId] = "exists";
+          }
+        }
+        setOrderShipmentMap(newMap);
+        toast.success(
+          `Bulk submit: ${json.summary.success} success, ${json.summary.skipped} skipped, ${json.summary.errors} errors`
+        );
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Bulk submit failed");
+    }
+    setBulkSubmitting(false);
   };
 
   // ── UI Helpers ───────────────────────────────────────────
@@ -711,10 +836,29 @@ export default function OrdersPage() {
             )}
           </p>
         </div>
-        <Button onClick={() => fetchOrders(page || 1)} disabled={loading}>
-          <Download className="size-4" />
-          {loading ? "Syncing..." : "Sync Orders"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {orders.length > 0 && (
+            <Button
+              variant="default"
+              onClick={handleBulkSubmit}
+              disabled={bulkSubmitting || loading || getEligibleOrders().length === 0}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              {bulkSubmitting ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Rocket className="size-4" />
+              )}
+              {bulkSubmitting
+                ? "Submitting..."
+                : `Bulk Submit (${getEligibleOrders().length})`}
+            </Button>
+          )}
+          <Button onClick={() => fetchOrders(page || 1, true)} disabled={loading}>
+            <Download className="size-4" />
+            {loading ? "Syncing..." : "Sync Orders"}
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -917,7 +1061,7 @@ export default function OrdersPage() {
                   variant="outline"
                   size="sm"
                   disabled={page <= 1}
-                  onClick={() => fetchOrders(page - 1)}
+                  onClick={() => fetchOrders(page - 1, true)}
                 >
                   <ChevronLeft className="size-4" /> Previous
                 </Button>
@@ -925,7 +1069,7 @@ export default function OrdersPage() {
                   variant="outline"
                   size="sm"
                   disabled={page >= totalPages}
-                  onClick={() => fetchOrders(page + 1)}
+                  onClick={() => fetchOrders(page + 1, true)}
                 >
                   Next <ChevronRight className="size-4" />
                 </Button>
@@ -934,6 +1078,87 @@ export default function OrdersPage() {
           )}
         </>
       )}
+
+      {/* ── Bulk Submit Results Dialog ────────────────────────── */}
+      <Dialog open={bulkDialogOpen} onOpenChange={setBulkDialogOpen}>
+        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Bulk Submit Results</DialogTitle>
+            <DialogDescription>
+              {bulkSubmitting
+                ? "Processing orders..."
+                : bulkResults
+                  ? `${bulkResults.summary.success} success, ${bulkResults.summary.skipped} skipped, ${bulkResults.summary.errors} errors`
+                  : "Starting..."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {bulkSubmitting && !bulkResults && (
+            <div className="flex flex-col items-center py-8">
+              <Loader2 className="size-8 animate-spin text-muted-foreground mb-3" />
+              <p className="text-sm text-muted-foreground">
+                Submitting orders to carrier...
+              </p>
+            </div>
+          )}
+
+          {bulkResults && (
+            <div className="space-y-3">
+              {/* Summary badges */}
+              <div className="flex gap-2">
+                <Badge className="bg-green-100 text-green-700">
+                  {bulkResults.summary.success} Success
+                </Badge>
+                <Badge className="bg-yellow-100 text-yellow-700">
+                  {bulkResults.summary.skipped} Skipped
+                </Badge>
+                <Badge className="bg-red-100 text-red-700">
+                  {bulkResults.summary.errors} Errors
+                </Badge>
+              </div>
+
+              {/* Results list */}
+              <div className="space-y-1.5">
+                {bulkResults.results.map((r) => (
+                  <div
+                    key={r.orderId}
+                    className={`flex items-start gap-2 rounded-md border p-2.5 text-sm ${
+                      r.status === "success"
+                        ? "border-green-200 bg-green-50"
+                        : r.status === "skipped"
+                          ? "border-yellow-200 bg-yellow-50"
+                          : "border-red-200 bg-red-50"
+                    }`}
+                  >
+                    {r.status === "success" ? (
+                      <CheckCircle2 className="size-4 text-green-600 mt-0.5 shrink-0" />
+                    ) : r.status === "skipped" ? (
+                      <SkipForward className="size-4 text-yellow-600 mt-0.5 shrink-0" />
+                    ) : (
+                      <XCircle className="size-4 text-red-600 mt-0.5 shrink-0" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium">
+                        Order #{r.orderNumber || r.orderId}
+                      </div>
+                      {r.awb && (
+                        <div className="text-xs text-green-700">
+                          AWB: {r.awb}
+                        </div>
+                      )}
+                      {r.error && (
+                        <div className="text-xs text-muted-foreground truncate">
+                          {r.error}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* ── Order Detail Dialog ─────────────────────────────── */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
@@ -1293,7 +1518,7 @@ export default function OrdersPage() {
                   }
                 >
                   <Truck className="size-4" />
-                  {creating ? "Creating..." : "Create Shipment"}
+                  {creating ? "Submitting..." : "Create & Submit"}
                 </Button>
               </TabsContent>
             </Tabs>

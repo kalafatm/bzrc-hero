@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Map to shipment payload
+    // Map to shipment payload (order already translated at fetch time)
     const payload = mapWooOrderToShipment(wooOrder, {
       customer_code,
       branch_code,

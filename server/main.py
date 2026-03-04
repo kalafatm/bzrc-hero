@@ -36,7 +36,9 @@ Base = declarative_base()
 NAQEL_BASE_URL = os.getenv("NAQEL_BASE_URL", "https://dev.gnteq.app")
 NAQEL_USERNAME = os.getenv("NAQEL_USERNAME", "")
 NAQEL_PASSWORD = os.getenv("NAQEL_PASSWORD", "")
-NAQEL_SUPPLIER_CODE = os.getenv("NAQEL_SUPPLIER_CODE", "SPL")
+NAQEL_SUPPLIER_CODE = os.getenv("NAQEL_SUPPLIER_CODE", "NQL")
+NAQEL_CUSTOMER_CODE = os.getenv("NAQEL_CUSTOMER_CODE", "")
+NAQEL_BRANCH_CODE = os.getenv("NAQEL_BRANCH_CODE", "")
 
 # ISO2 -> ISO3 country code mapping for shipper (Naqel requires ISO3 for shipper)
 COUNTRY_ISO2_TO_ISO3 = {
@@ -211,6 +213,15 @@ class TrackingEvent(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     shipment = relationship("Shipment", back_populates="tracking_events")
+
+
+class AwbCounter(Base):
+    """Global AWB counter for Naqel production (pre-assigned AWBs)."""
+    __tablename__ = "awb_counter"
+
+    id = Column(Integer, primary_key=True, default=1)
+    next_awb = Column(BigInteger, nullable=False, default=510047000)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class ExchangeRate(Base):
@@ -443,6 +454,22 @@ def get_db():
         db.close()
 
 
+# ---------- AWB Counter ----------
+
+
+def get_next_awb(db: Session) -> str:
+    """Atomically get next AWB number and increment counter.
+    Uses SELECT FOR UPDATE to prevent race conditions."""
+    counter = db.query(AwbCounter).filter(AwbCounter.id == 1).with_for_update().first()
+    if not counter:
+        raise HTTPException(status_code=500, detail="AWB counter not initialized")
+    awb = str(counter.next_awb)
+    counter.next_awb += 1
+    counter.updated_at = datetime.utcnow()
+    db.flush()
+    return awb
+
+
 # ---------- Naqel API helper ----------
 
 
@@ -628,7 +655,7 @@ def _store_tracking_events(db: Session, shipment_id: int, awb: str, parsed_event
     return new_count
 
 
-def build_naqel_payload(shipment: Shipment, items: list) -> dict:
+def build_naqel_payload(shipment: Shipment, items: list, awb_number: str = "") -> dict:
     """Build the GN Connect API request payload from our DB shipment."""
     # Shipper country code: convert ISO2 to ISO3
     shipper_cc = shipment.shipper_country_code or "TR"
@@ -637,12 +664,13 @@ def build_naqel_payload(shipment: Shipment, items: list) -> dict:
     payload = {
         "customerCode": shipment.customer_code,
         "branchCode": shipment.branch_code,
+        "airwaybillNumber": awb_number,
         "shippingDateTime": shipment.shipping_datetime.isoformat() if shipment.shipping_datetime else datetime.utcnow().isoformat(),
         "descriptionOfGoods": (shipment.description_of_goods or "Goods")[:100],
         "numberOfPieces": str(shipment.number_of_pieces or 1),
         "customsDeclaredValue": float(shipment.customs_declared_value) if shipment.customs_declared_value else 0,
         "customsDeclaredValueCurrency": shipment.customs_value_currency or "USD",
-        "productType": shipment.product_type or "DLV",
+        "productType": shipment.product_type or "DLVI",
         "supplierCode": NAQEL_SUPPLIER_CODE,
         "includeLabel": shipment.include_label,
         "includeOfficeDetails": shipment.include_office_details,
@@ -1144,72 +1172,100 @@ async def submit_shipment_endpoint(shipment_id: int, db: Session = Depends(get_d
     # 2. Get Naqel token
     token = await get_naqel_token()
 
-    # 3. Build request payload
-    naqel_payload = build_naqel_payload(shipment, items)
-
-    # 4. Call GN Connect API
+    # 3. Allocate AWB and submit with retry on "already exists"
     url = f"{NAQEL_BASE_URL}/api/gnconnect/Shipments"
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                url,
-                json=naqel_payload,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
-            )
+    max_retries = 10
+    last_error = None
 
-        carrier_response = None
+    for attempt in range(max_retries):
+        awb_number = get_next_awb(db)
+        naqel_payload = build_naqel_payload(shipment, items, awb_number=awb_number)
+
         try:
-            carrier_response = resp.json()
-        except Exception:
-            carrier_response = {"raw": resp.text[:2000]}
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    url,
+                    json=naqel_payload,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                )
 
-        # Store request/response regardless of outcome
-        shipment.carrier_request_payload = naqel_payload
-        shipment.carrier_response_payload = carrier_response
+            carrier_response = None
+            try:
+                carrier_response = resp.json()
+            except Exception:
+                carrier_response = {"raw": resp.text[:2000]}
 
-        # Check for success (Naqel returns 200 or 201)
-        if resp.status_code in (200, 201) and isinstance(carrier_response, dict):
-            naqel_status = carrier_response.get("status", "")
+            # Store request/response regardless of outcome
+            shipment.carrier_request_payload = naqel_payload
+            shipment.carrier_response_payload = carrier_response
 
-            if naqel_status == "Success":
-                awb = carrier_response.get("airwaybill", "")
-                label_b64 = carrier_response.get("shipmentLabel", "")
+            # Check for "already exists" → retry with next AWB
+            if isinstance(carrier_response, dict):
+                errors = carrier_response.get("errors") or []
+                msg = carrier_response.get("message") or ""
+                is_awb_exists = (
+                    (isinstance(errors, list) and any("already exists" in str(e).lower() for e in errors)) or
+                    "already exists" in msg.lower()
+                )
+                if is_awb_exists:
+                    logger.info(f"Shipment {shipment_id} AWB {awb_number} already exists, retrying ({attempt+1}/{max_retries})")
+                    last_error = f"AWB {awb_number} already exists"
+                    continue
 
-                shipment.airwaybill_number = awb
-                shipment.tracking_number = awb
-                shipment.status = "submitted"
-                shipment.status_message = "Submitted to Naqel successfully"
-                shipment.last_status_change_at = datetime.utcnow()
+            # Check for success (Naqel returns 200 or 201)
+            if resp.status_code in (200, 201) and isinstance(carrier_response, dict):
+                naqel_status = carrier_response.get("status", "")
 
-                if label_b64:
-                    shipment.label_base64 = label_b64
+                if naqel_status == "Success":
+                    resp_awb = carrier_response.get("airwaybill", "") or awb_number
+                    label_b64 = carrier_response.get("shipmentLabel", "")
 
-                logger.info(f"Shipment {shipment_id} submitted: AWB={awb}")
+                    shipment.airwaybill_number = resp_awb
+                    shipment.tracking_number = resp_awb
+                    shipment.status = "submitted"
+                    shipment.status_message = "Submitted to Naqel successfully"
+                    shipment.last_status_change_at = datetime.utcnow()
+
+                    if label_b64:
+                        shipment.label_base64 = label_b64
+
+                    logger.info(f"Shipment {shipment_id} submitted: AWB={resp_awb} (attempt {attempt+1})")
+                    break
+                else:
+                    # Naqel returned 200 but with non-AWB error (real failure)
+                    error_msg = carrier_response.get("message") or carrier_response.get("detail") or str(carrier_response)
+                    shipment.status = "submit_failed"
+                    shipment.status_message = f"Naqel error: {error_msg[:500]}"
+                    shipment.last_status_change_at = datetime.utcnow()
+                    logger.warning(f"Shipment {shipment_id} Naqel error: {error_msg}")
+                    break
             else:
-                # Naqel returned 200 but with error (fake-200)
-                error_msg = carrier_response.get("message") or carrier_response.get("detail") or str(carrier_response)
+                error_detail = str(carrier_response)[:500] if carrier_response else resp.text[:500]
                 shipment.status = "submit_failed"
-                shipment.status_message = f"Naqel error: {error_msg[:500]}"
+                shipment.status_message = f"Naqel HTTP {resp.status_code}: {error_detail}"
                 shipment.last_status_change_at = datetime.utcnow()
-                logger.warning(f"Shipment {shipment_id} Naqel fake-200 error: {error_msg}")
-        else:
-            error_detail = str(carrier_response)[:500] if carrier_response else resp.text[:500]
-            shipment.status = "submit_failed"
-            shipment.status_message = f"Naqel HTTP {resp.status_code}: {error_detail}"
-            shipment.last_status_change_at = datetime.utcnow()
-            logger.error(f"Shipment {shipment_id} submit failed: HTTP {resp.status_code}")
+                logger.error(f"Shipment {shipment_id} submit failed: HTTP {resp.status_code}")
+                break
 
-    except httpx.TimeoutException:
+        except httpx.TimeoutException:
+            shipment.status = "submit_failed"
+            shipment.status_message = "Naqel API request timed out"
+            shipment.last_status_change_at = datetime.utcnow()
+            break
+        except Exception as e:
+            shipment.status = "submit_failed"
+            shipment.status_message = f"Error: {str(e)[:500]}"
+            shipment.last_status_change_at = datetime.utcnow()
+            break
+    else:
+        # All retries exhausted
         shipment.status = "submit_failed"
-        shipment.status_message = "Naqel API request timed out"
+        shipment.status_message = f"AWB allocation failed after {max_retries} attempts: {last_error}"
         shipment.last_status_change_at = datetime.utcnow()
-    except Exception as e:
-        shipment.status = "submit_failed"
-        shipment.status_message = f"Error: {str(e)[:500]}"
-        shipment.last_status_change_at = datetime.utcnow()
+        logger.error(f"Shipment {shipment_id}: AWB exhausted after {max_retries} retries")
 
     db.commit()
     db.refresh(shipment)
@@ -1222,17 +1278,67 @@ async def submit_shipment_endpoint(shipment_id: int, db: Session = Depends(get_d
 
 
 @router.get("/{shipment_id}/label")
-def get_label_endpoint(shipment_id: int, db: Session = Depends(get_db)):
-    """Download the shipment label as PDF."""
+async def get_label_endpoint(shipment_id: int, db: Session = Depends(get_db)):
+    """Download the shipment label as PDF.
+
+    First tries to fetch a fresh label from the dedicated LabelPrint endpoint
+    (which produces the correct Naqel label layout). Falls back to stored
+    inline label from shipment creation if LabelPrint fails.
+    """
     shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
     if not shipment:
         raise HTTPException(status_code=404, detail="Shipment not found")
 
-    if not shipment.label_base64:
+    if not shipment.airwaybill_number:
+        raise HTTPException(status_code=404, detail="No AWB — shipment not yet submitted")
+
+    # Try the dedicated LabelPrint endpoint for proper Naqel label layout
+    label_b64 = None
+    try:
+        token = await get_naqel_token()
+        url = f"{NAQEL_BASE_URL}/api/gnconnect/Shipments/LabelPrint"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json={
+                "airwaybills": [shipment.airwaybill_number],
+                "labelFormat": "PDF",
+                "labelSize": "4X6",
+                "customerCode": shipment.customer_code or NAQEL_CUSTOMER_CODE,
+                "branchCode": shipment.branch_code or NAQEL_BRANCH_CODE,
+            }, headers={
+                "Authorization": f"token {token}",
+                "Content-Type": "application/json",
+            })
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                # Response may contain base64 label directly or in a field
+                if isinstance(data, str) and len(data) > 100:
+                    label_b64 = data
+                elif isinstance(data, dict):
+                    label_b64 = data.get("shipmentLabel") or data.get("label") or data.get("labelData") or ""
+                elif isinstance(data, list) and len(data) > 0:
+                    item = data[0]
+                    if isinstance(item, str) and len(item) > 100:
+                        label_b64 = item
+                    elif isinstance(item, dict):
+                        label_b64 = item.get("shipmentLabel") or item.get("label") or item.get("labelData") or ""
+
+                if label_b64:
+                    # Update stored label with the proper one
+                    shipment.label_base64 = label_b64
+                    db.commit()
+                    logger.info(f"Label refreshed from LabelPrint for shipment {shipment_id}")
+    except Exception as e:
+        logger.warning(f"LabelPrint API call failed for shipment {shipment_id}: {e}")
+
+    # Fall back to stored label
+    if not label_b64:
+        label_b64 = shipment.label_base64
+
+    if not label_b64:
         raise HTTPException(status_code=404, detail="No label available for this shipment")
 
     try:
-        pdf_bytes = base64.b64decode(shipment.label_base64)
+        pdf_bytes = base64.b64decode(label_b64)
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to decode label data")
 

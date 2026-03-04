@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOrders } from "@/lib/api/woo-client";
+import { translateWooOrder } from "@/lib/api/gemini";
 
 export async function GET(req: NextRequest) {
   try {
@@ -14,7 +15,12 @@ export async function GET(req: NextRequest) {
       status,
     });
 
-    return NextResponse.json({ orders, totalPages, total });
+    // Auto-translate Arabic/non-Latin fields (names → transliterate, addresses → translate)
+    const translatedOrders = await Promise.all(
+      orders.map((o) => translateWooOrder(o))
+    );
+
+    return NextResponse.json({ orders: translatedOrders, totalPages, total });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to fetch orders";
     return NextResponse.json({ error: msg }, { status: 500 });

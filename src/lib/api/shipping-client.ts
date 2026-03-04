@@ -7,7 +7,8 @@ import type {
 } from "./shipping-types";
 
 const SHIPPING_API_URL =
-  process.env.SHIPPING_API_URL || "http://135.181.215.44";
+  process.env.SHIPPING_API_URL || "https://dev.bazaarica.com";
+const SHIPPING_API_KEY = process.env.SHIPPING_API_KEY || "";
 
 class ShippingApiError extends Error {
   constructor(
@@ -29,6 +30,7 @@ async function request<T>(
     ...options,
     headers: {
       "Content-Type": "application/json",
+      ...(SHIPPING_API_KEY ? { "X-API-Key": SHIPPING_API_KEY } : {}),
       ...options.headers,
     },
     signal: AbortSignal.timeout(30_000),

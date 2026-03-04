@@ -3,6 +3,8 @@
  * Pure 1:1 translation only — no AI interpretation.
  */
 
+import type { WooAddress, WooOrder } from "./woo-types";
+
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = "gemini-2.0-flash";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
@@ -15,9 +17,16 @@ interface GeminiResponse {
   }[];
 }
 
+// Circuit breaker: skip Gemini calls for 5 minutes after an auth/key error
+let circuitBrokenUntil = 0;
+
 async function callGemini(prompt: string): Promise<string> {
   if (!GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY is not configured");
+  }
+
+  if (Date.now() < circuitBrokenUntil) {
+    throw new Error("Gemini API temporarily disabled (key error)");
   }
 
   const res = await fetch(GEMINI_URL, {
@@ -35,6 +44,10 @@ async function callGemini(prompt: string): Promise<string> {
 
   if (!res.ok) {
     const body = await res.text();
+    // If key is invalid/expired, activate circuit breaker (5 min)
+    if (res.status === 400 && body.includes("API_KEY_INVALID")) {
+      circuitBrokenUntil = Date.now() + 5 * 60 * 1000;
+    }
     throw new Error(`Gemini API error: ${res.status} — ${body.substring(0, 300)}`);
   }
 
@@ -180,4 +193,62 @@ export async function translateFields(
   }
 
   return results;
+}
+
+/**
+ * Translate non-Latin fields in a WooCommerce address.
+ * Names → phonetic transliteration, Addresses → context-aware translation.
+ */
+async function translateWooAddress(
+  addr: WooAddress
+): Promise<WooAddress> {
+  const fields: Record<string, string> = {};
+  const keys = ["first_name", "last_name", "company", "address_1", "address_2", "city", "state"] as const;
+  let needsTranslation = false;
+
+  for (const k of keys) {
+    const v = addr[k];
+    if (v) {
+      fields[k] = v;
+      if (isNonEnglish(v)) needsTranslation = true;
+    }
+  }
+
+  if (!needsTranslation) return addr;
+
+  const translated = await translateFields(fields);
+  return { ...addr, ...translated } as WooAddress;
+}
+
+/**
+ * Translate all non-Latin fields in a WooCommerce order (billing, shipping, line items).
+ * Mutates the order in-place and returns it.
+ * On failure for any field, keeps original text.
+ */
+export async function translateWooOrder(order: WooOrder): Promise<WooOrder> {
+  try {
+    // Translate billing & shipping addresses in parallel
+    const [translatedBilling, translatedShipping] = await Promise.all([
+      translateWooAddress(order.billing).catch(() => order.billing),
+      translateWooAddress(order.shipping).catch(() => order.shipping),
+    ]);
+
+    order.billing = translatedBilling;
+    order.shipping = translatedShipping;
+
+    // Translate line item names if non-Latin
+    for (const li of order.line_items) {
+      if (li.name && isNonEnglish(li.name)) {
+        try {
+          li.name = await translateToEnglish(li.name);
+        } catch {
+          // Keep original
+        }
+      }
+    }
+  } catch {
+    // Translation failed entirely — return order as-is
+  }
+
+  return order;
 }
