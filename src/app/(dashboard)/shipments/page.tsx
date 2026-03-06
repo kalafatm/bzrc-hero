@@ -30,9 +30,12 @@ import {
   ChevronRight,
   Download,
   FileText,
+  FileSpreadsheet,
   Radar,
   MapPin,
   Clock,
+  Loader2,
+  XCircle,
 } from "lucide-react";
 
 interface ShipmentData {
@@ -154,6 +157,12 @@ export default function ShipmentsPage() {
   const [trackingData, setTrackingData] = useState<Record<number, TrackingData>>({});
   const [trackingAll, setTrackingAll] = useState(false);
 
+  // Invoice generation state
+  const [generatingInvoice, setGeneratingInvoice] = useState<Set<number>>(new Set());
+
+  // Cancel state
+  const [cancelling, setCancelling] = useState<Set<number>>(new Set());
+
   const fetchShipments = useCallback(async () => {
     setLoading(true);
     try {
@@ -214,7 +223,9 @@ export default function ShipmentsPage() {
         toast.error(`#${shipmentId}: ${json.error}`);
       } else {
         const s = json.shipment;
-        if (s.airwaybill_number) {
+        if (s.status === "submit_failed") {
+          toast.error(`#${s.id}: ${s.status_message || "Submit failed at carrier"}`);
+        } else if (s.airwaybill_number) {
           toast.success(`#${s.id} submitted! AWB: ${s.airwaybill_number}`);
         } else {
           toast.success(`#${s.id} submitted (status: ${s.status})`);
@@ -342,7 +353,7 @@ export default function ShipmentsPage() {
         toast.error(json.error);
       } else {
         toast.success(
-          `Tracked ${json.total} shipments: ${json.updated} updated, ${json.failed} failed`
+          `Tracked ${json.total_tracked} shipments: ${json.updated} updated, ${json.errors} failed`
         );
         fetchShipments();
       }
@@ -350,6 +361,112 @@ export default function ShipmentsPage() {
       toast.error(err instanceof Error ? err.message : "Bulk tracking failed");
     }
     setTrackingAll(false);
+  };
+
+  const handleGenerateInvoice = async (shipment: ShipmentData) => {
+    if (!shipment.woo_order_id) {
+      toast.error("No WooCommerce order linked to this shipment");
+      return;
+    }
+    setGeneratingInvoice((prev) => new Set(prev).add(shipment.id));
+    try {
+      // 1. Fetch WC order for line items
+      const orderRes = await fetch(`/api/woo/orders/${shipment.woo_order_id}`);
+      const orderJson = await orderRes.json();
+      if (orderJson.error) throw new Error(orderJson.error);
+      const order = orderJson.order;
+
+      // 2. Get product IDs from line items
+      const productIds = (order.line_items || [])
+        .map((li: { product_id: number }) => li.product_id)
+        .filter((id: number) => id > 0);
+
+      // 3. Fetch product list prices
+      let prices: Record<string, { regular_price: string; price: string; sku: string }> = {};
+      if (productIds.length > 0) {
+        const priceRes = await fetch(`/api/woo/products/prices?ids=${productIds.join(",")}`);
+        const priceJson = await priceRes.json();
+        if (!priceJson.error) prices = priceJson.prices;
+      }
+
+      // 4. Build items with list prices for distribution
+      const itemsWithPrices = (order.line_items || []).map(
+        (li: { name: string; sku: string; quantity: number; product_id: number }) => {
+          const product = prices[String(li.product_id)];
+          const listPrice = product
+            ? parseFloat(product.regular_price || product.price) || 0
+            : 0;
+          return {
+            description: li.name,
+            sku: li.sku || product?.sku || "",
+            quantity: li.quantity,
+            listPrice,
+          };
+        }
+      );
+
+      // 5. Distribute declared value and generate PDF
+      const { distributeByListPrice, generateCommercialInvoice } = await import(
+        "@/lib/invoice/commercial-invoice"
+      );
+
+      const declaredValue = shipment.customs_declared_value || 0;
+      const invoiceItems = distributeByListPrice(itemsWithPrices, declaredValue);
+
+      await generateCommercialInvoice({
+        invoiceNumber: `INV-${shipment.woo_order_number || shipment.woo_order_id}`,
+        invoiceDate: new Date().toLocaleDateString("en-GB"),
+        awbNumber: shipment.airwaybill_number || "",
+        consigneeName: shipment.consignee.person_name,
+        consigneeCompany: shipment.consignee.company_name || undefined,
+        consigneeAddress: [shipment.consignee.line1, shipment.consignee.line2]
+          .filter(Boolean)
+          .join(", "),
+        consigneeCity: shipment.consignee.city,
+        consigneeCountry: shipment.consignee.country_code,
+        consigneePhone: shipment.consignee.phone1 || shipment.consignee.cell_phone || undefined,
+        items: invoiceItems,
+        totalValue: declaredValue,
+        currency: shipment.customs_value_currency || "USD",
+        numberOfPieces: shipment.number_of_pieces,
+        totalWeight: shipment.shipment_weight_value,
+      });
+
+      toast.success("Invoice generated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to generate invoice");
+    }
+    setGeneratingInvoice((prev) => {
+      const next = new Set(prev);
+      next.delete(shipment.id);
+      return next;
+    });
+  };
+
+  const isCancellable = (s: ShipmentData) =>
+    s.status === "submit_failed" || s.status === "failed" || s.status === "created" || s.status === "draft";
+
+  const handleCancelSingle = async (shipmentId: number) => {
+    setCancelling((prev) => new Set(prev).add(shipmentId));
+    try {
+      const res = await fetch(`/api/shipments/${shipmentId}/cancel`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (json.error) {
+        toast.error(`#${shipmentId}: ${json.error}`);
+      } else {
+        toast.success(`#${shipmentId} cancelled`);
+        fetchShipments();
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Cancel failed");
+    }
+    setCancelling((prev) => {
+      const next = new Set(prev);
+      next.delete(shipmentId);
+      return next;
+    });
   };
 
   const isTrackable = (s: ShipmentData) =>
@@ -577,13 +694,44 @@ export default function ShipmentsPage() {
                             </Button>
                           )}
                           {s.airwaybill_number && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleDownloadLabel(s)}
+                                title="Download Label"
+                              >
+                                <Download className="size-3.5" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleGenerateInvoice(s)}
+                                disabled={generatingInvoice.has(s.id)}
+                                title="Commercial Invoice"
+                              >
+                                {generatingInvoice.has(s.id) ? (
+                                  <Loader2 className="size-3.5 animate-spin" />
+                                ) : (
+                                  <FileSpreadsheet className="size-3.5" />
+                                )}
+                              </Button>
+                            </>
+                          )}
+                          {isCancellable(s) && (
                             <Button
                               size="sm"
                               variant="ghost"
-                              onClick={() => handleDownloadLabel(s)}
-                              title="Download Label"
+                              className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                              onClick={() => handleCancelSingle(s.id)}
+                              disabled={cancelling.has(s.id)}
+                              title="Cancel Shipment"
                             >
-                              <Download className="size-3.5" />
+                              {cancelling.has(s.id) ? (
+                                <Loader2 className="size-3.5 animate-spin" />
+                              ) : (
+                                <XCircle className="size-3.5" />
+                              )}
                             </Button>
                           )}
                         </div>
@@ -741,14 +889,29 @@ export default function ShipmentsPage() {
                             </div>
                           )}
                         </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleDownloadLabel(detail)}
-                        >
-                          <FileText className="size-4" />
-                          Label
-                        </Button>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleDownloadLabel(detail)}
+                          >
+                            <FileText className="size-4" />
+                            Label
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleGenerateInvoice(detail)}
+                            disabled={generatingInvoice.has(detail.id)}
+                          >
+                            {generatingInvoice.has(detail.id) ? (
+                              <Loader2 className="size-4 animate-spin" />
+                            ) : (
+                              <FileSpreadsheet className="size-4" />
+                            )}
+                            Invoice
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </>

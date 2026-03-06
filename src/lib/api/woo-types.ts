@@ -62,6 +62,14 @@ export interface WooOrder {
   meta_data: WooMeta[];
 }
 
+export interface WooProduct {
+  id: number;
+  name: string;
+  sku: string;
+  regular_price: string;
+  price: string;
+}
+
 export interface WooListParams {
   page?: number;
   per_page?: number;

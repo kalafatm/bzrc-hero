@@ -90,6 +90,7 @@ export async function POST(req: NextRequest) {
 
     // Map to shipment payload (order already translated at fetch time)
     const payload = mapWooOrderToShipment(wooOrder, {
+      carrier_code: carrier || "naqel",
       customer_code,
       branch_code,
       product_type,

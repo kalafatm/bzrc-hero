@@ -2,6 +2,7 @@ import type {
   ShipmentCreate,
   ShipmentRead,
   ShipmentListParams,
+  TrackingEvent,
   TrackingResponse,
   BulkTrackingResult,
 } from "./shipping-types";
@@ -53,7 +54,7 @@ async function request<T>(
 export async function createShipment(
   data: ShipmentCreate
 ): Promise<ShipmentRead> {
-  return request<ShipmentRead>("/shipments/", {
+  return request<ShipmentRead>("/shipments/shipment", {
     method: "POST",
     body: JSON.stringify(data),
   });
@@ -70,25 +71,25 @@ export async function listShipments(
   qs.set("offset", String(params?.offset ?? 0));
 
   const query = qs.toString();
-  return request<ShipmentRead[]>(`/shipments/?${query}`);
+  return request<ShipmentRead[]>(`/shipments/shipment?${query}`);
 }
 
 export async function getShipment(id: number): Promise<ShipmentRead> {
-  return request<ShipmentRead>(`/shipments/${id}`);
+  return request<ShipmentRead>(`/shipments/shipment/${id}`);
 }
 
 export async function updateShipment(
   id: number,
-  data: Partial<ShipmentCreate>
+  data: Partial<ShipmentCreate> & Record<string, unknown>
 ): Promise<ShipmentRead> {
-  return request<ShipmentRead>(`/shipments/${id}`, {
+  return request<ShipmentRead>(`/shipments/shipment/${id}`, {
     method: "PATCH",
     body: JSON.stringify(data),
   });
 }
 
 export async function submitShipment(id: number): Promise<ShipmentRead> {
-  return request<ShipmentRead>(`/shipments/${id}/submit`, {
+  return request<ShipmentRead>(`/shipments/shipment/${id}/submit`, {
     method: "POST",
   });
 }
@@ -96,13 +97,13 @@ export async function submitShipment(id: number): Promise<ShipmentRead> {
 // ── Tracking ─────────────────────────────────────────────────
 
 export async function trackShipment(id: number): Promise<TrackingResponse> {
-  return request<TrackingResponse>(`/shipments/${id}/track`, {
+  return request<TrackingResponse>(`/shipments/shipment/${id}/track`, {
     method: "POST",
   });
 }
 
-export async function getTrackingEvents(id: number): Promise<TrackingResponse> {
-  return request<TrackingResponse>(`/shipments/${id}/tracking-events`);
+export async function getTrackingEvents(id: number): Promise<TrackingEvent[]> {
+  return request<TrackingEvent[]>(`/shipments/shipment/${id}/tracking-events`);
 }
 
 export async function pollAllTracking(): Promise<BulkTrackingResult> {

@@ -75,6 +75,7 @@ export interface ShipmentItemRead extends ShipmentItemCreate {
 export interface ShipmentCreate {
   woo_order_id?: number | null;
   woo_order_number?: string | null;
+  carrier_code?: string | null; // "naqel" | "smsa"
   customer_code: string;
   branch_code: string;
   product_type: string; // "DLV", "PUD"
@@ -105,6 +106,7 @@ export interface ShipmentRead {
   id: number;
   woo_order_id: number | null;
   woo_order_number: string | null;
+  carrier_code: string | null;
   customer_code: string;
   branch_code: string;
   product_type: string;
@@ -156,19 +158,20 @@ export interface TrackingResponse {
   shipment_id: number;
   airwaybill_number: string;
   current_status: string;
+  status_message?: string | null;
   events: TrackingEvent[];
   last_tracked_at: string | null;
-  raw_carrier_response?: Record<string, unknown>;
 }
 
 export interface BulkTrackingResult {
-  total: number;
+  total_tracked: number;
   updated: number;
-  failed: number;
-  results: {
+  errors: number;
+  details: {
     shipment_id: number;
-    airwaybill_number: string;
-    status: string;
+    awb: string;
+    status?: string;
+    new_events?: number;
     error?: string;
   }[];
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const SHIPPING_API_URL = process.env.SHIPPING_API_URL || "http://135.181.215.44";
+const SHIPPING_API_URL = process.env.SHIPPING_API_URL || "https://dev.bazaarica.com";
 
 /**
  * GET /api/shipments/[id]/label — proxy label PDF from remote API
@@ -11,7 +11,7 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const res = await fetch(`${SHIPPING_API_URL}/shipments/${id}/label`);
+    const res = await fetch(`${SHIPPING_API_URL}/shipments/shipment/${id}/label`);
 
     if (!res.ok) {
       const text = await res.text();

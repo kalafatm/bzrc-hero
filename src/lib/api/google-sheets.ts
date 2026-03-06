@@ -82,7 +82,7 @@ async function getAccessToken(): Promise<string> {
   const payload = base64url(
     JSON.stringify({
       iss: key.client_email,
-      scope: "https://www.googleapis.com/auth/spreadsheets.readonly",
+      scope: "https://www.googleapis.com/auth/spreadsheets",
       aud: "https://oauth2.googleapis.com/token",
       iat: now,
       exp: now + 3600,
@@ -291,4 +291,36 @@ export async function getCarrierConfig(
       (r) => r.carrierCode === carrierCode.toLowerCase()
     ) || null
   );
+}
+
+/**
+ * Write values to a Google Sheet range.
+ */
+async function updateSheet(tab: string, range: string, values: string[][]): Promise<void> {
+  const token = await getAccessToken();
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(tab)}!${range}?valueInputOption=RAW`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ values }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Google Sheets write error: ${res.status} — ${body.substring(0, 300)}`);
+  }
+}
+
+/**
+ * Update carrier config rows in Google Sheets and invalidate cache.
+ */
+export async function updateCarrierConfig(configs: CarrierConfigRow[]): Promise<void> {
+  const values = configs.map((c) => [c.carrierCode, c.carrierName, String(c.declaredValueMultiplier)]);
+  await updateSheet("carrierConfig", `A2:C${configs.length + 1}`, values);
+  // Invalidate cache so next read picks up new values
+  cachedData = null;
+  cacheTimestamp = 0;
+  // Also clear token cache scope change if needed
+  cachedToken = null;
+  tokenExpiry = 0;
 }

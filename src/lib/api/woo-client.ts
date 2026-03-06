@@ -1,14 +1,12 @@
-import type { WooOrder, WooListParams } from "./woo-types";
+import type { WooOrder, WooProduct, WooListParams } from "./woo-types";
+import { getActiveStore } from "@/config/stores";
 
-const WOO_BASE_URL = process.env.WOO_BASE_URL!;
-const WOO_CONSUMER_KEY = process.env.WOO_CONSUMER_KEY!;
-const WOO_CONSUMER_SECRET = process.env.WOO_CONSUMER_SECRET!;
-
-function buildUrl(endpoint: string, params?: Record<string, string>): string {
-  const base = WOO_BASE_URL.replace(/\/+$/, "");
+function buildUrl(endpoint: string, params?: Record<string, string>, storeId?: string): string {
+  const store = getActiveStore(storeId);
+  const base = store.baseUrl.replace(/\/+$/, "");
   const url = new URL(`/wp-json/wc/v3/${endpoint}`, base);
-  url.searchParams.set("consumer_key", WOO_CONSUMER_KEY);
-  url.searchParams.set("consumer_secret", WOO_CONSUMER_SECRET);
+  url.searchParams.set("consumer_key", store.consumerKey);
+  url.searchParams.set("consumer_secret", store.consumerSecret);
   if (params) {
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== "") {
@@ -21,9 +19,10 @@ function buildUrl(endpoint: string, params?: Record<string, string>): string {
 
 async function wooRequest<T>(
   endpoint: string,
-  params?: Record<string, string>
+  params?: Record<string, string>,
+  storeId?: string
 ): Promise<{ data: T; totalPages: number; total: number }> {
-  const url = buildUrl(endpoint, params);
+  const url = buildUrl(endpoint, params, storeId);
   const res = await fetch(url, {
     method: "GET",
     headers: { "Content-Type": "application/json" },
@@ -44,13 +43,14 @@ async function wooRequest<T>(
 }
 
 export async function getOrders(
-  params?: WooListParams
+  params?: WooListParams & { storeId?: string; lang?: string }
 ): Promise<{ orders: WooOrder[]; totalPages: number; total: number }> {
   const qp: Record<string, string> = {
     per_page: String(params?.per_page ?? 50),
     page: String(params?.page ?? 1),
     orderby: params?.orderby ?? "date",
     order: params?.order ?? "desc",
+    lang: params?.lang ?? "en",
   };
   if (params?.status) {
     qp.status = Array.isArray(params.status)
@@ -62,13 +62,14 @@ export async function getOrders(
 
   const { data, totalPages, total } = await wooRequest<WooOrder[]>(
     "orders",
-    qp
+    qp,
+    params?.storeId
   );
   return { orders: data, totalPages, total };
 }
 
-export async function getOrder(orderId: number): Promise<WooOrder> {
-  const { data } = await wooRequest<WooOrder>(`orders/${orderId}`);
+export async function getOrder(orderId: number, storeId?: string, lang?: string): Promise<WooOrder> {
+  const { data } = await wooRequest<WooOrder>(`orders/${orderId}`, { lang: lang ?? "en" }, storeId);
   return data;
 }
 
@@ -76,11 +77,27 @@ export async function getOrder(orderId: number): Promise<WooOrder> {
  * Update a WooCommerce order (PUT /orders/{id}).
  * Only send changed fields — WC merges with existing data.
  */
+export async function getProductsByIds(
+  productIds: number[],
+  storeId?: string,
+  lang?: string
+): Promise<WooProduct[]> {
+  if (productIds.length === 0) return [];
+  const params: Record<string, string> = {
+    include: productIds.join(","),
+    per_page: String(Math.min(productIds.length, 100)),
+  };
+  if (lang) params.lang = lang;
+  const { data } = await wooRequest<WooProduct[]>("products", params, storeId);
+  return data;
+}
+
 export async function updateOrder(
   orderId: number,
-  updateData: Record<string, unknown>
+  updateData: Record<string, unknown>,
+  storeId?: string
 ): Promise<WooOrder> {
-  const url = buildUrl(`orders/${orderId}`);
+  const url = buildUrl(`orders/${orderId}`, undefined, storeId);
   const res = await fetch(url, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },

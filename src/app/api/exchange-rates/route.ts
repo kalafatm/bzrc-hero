@@ -1,40 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// Exchange rates are on the shipping service (port 8001), not proxied through LiteSpeed
+const SHIPPING_API_URL =
+  process.env.SHIPPING_API_INTERNAL_URL || process.env.SHIPPING_API_URL || "https://dev.bazaarica.com";
+
 /**
- * GET /api/exchange-rates — currency conversion using free open exchange rate API
- * Query: ?from=USD&to=JOD&amount=76.66
- * Returns: { from, to, amount, rate, converted_amount }
- *
- * Uses https://open.er-api.com (free, no API key, updates daily)
- * Cached in-memory for 1 hour.
+ * GET /api/exchange-rates — proxy to backend TCMB-based exchange rates
+ * Query: ?from=USD&to=SAR&amount=76.66
+ * Returns: { from, to, amount, converted_amount }
  */
-
-// In-memory rate cache: baseCurrency -> { rates, fetchedAt }
-const rateCache = new Map<string, { rates: Record<string, number>; fetchedAt: number }>();
-const CACHE_TTL = 60 * 60 * 1000; // 1 hour
-
-async function getRates(baseCurrency: string): Promise<Record<string, number>> {
-  const now = Date.now();
-  const cached = rateCache.get(baseCurrency);
-
-  if (cached && now - cached.fetchedAt < CACHE_TTL) {
-    return cached.rates;
-  }
-
-  const res = await fetch(
-    `https://open.er-api.com/v6/latest/${baseCurrency}`,
-    { signal: AbortSignal.timeout(10_000) }
-  );
-
-  if (!res.ok) {
-    throw new Error(`Exchange rate API error: ${res.status}`);
-  }
-
-  const data = (await res.json()) as { rates: Record<string, number> };
-  rateCache.set(baseCurrency, { rates: data.rates, fetchedAt: now });
-  return data.rates;
-}
-
 export async function GET(req: NextRequest) {
   try {
     const sp = req.nextUrl.searchParams;
@@ -43,9 +17,13 @@ export async function GET(req: NextRequest) {
     const amountStr = sp.get("amount");
 
     if (!to || !amountStr) {
-      // List all rates for the base currency
-      const rates = await getRates(from);
-      return NextResponse.json({ base: from, rates });
+      // List all rates
+      const res = await fetch(`${SHIPPING_API_URL}/exchange-rates/`, {
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) throw new Error(`Exchange rate API: ${res.status}`);
+      const data = await res.json();
+      return NextResponse.json(data);
     }
 
     const amount = parseFloat(amountStr);
@@ -53,24 +31,24 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
     }
 
-    const rates = await getRates(from);
-    const rate = rates[to];
+    const res = await fetch(
+      `${SHIPPING_API_URL}/exchange-rates/convert?amount=${amount}&from=${from}&to=${to}`,
+      { signal: AbortSignal.timeout(10_000) }
+    );
 
-    if (rate == null) {
-      return NextResponse.json(
-        { error: `No rate found for ${from} → ${to}` },
-        { status: 404 }
-      );
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `HTTP ${res.status}`);
     }
 
-    const converted_amount = Math.round(amount * rate * 100) / 100;
-
+    const data = await res.json();
+    // Map backend response to frontend expected shape
     return NextResponse.json({
-      from,
-      to,
-      amount,
-      rate,
-      converted_amount,
+      from: data.from,
+      to: data.to,
+      amount: data.amount,
+      rate: data.converted / data.amount,
+      converted_amount: data.converted,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Exchange rate fetch failed";

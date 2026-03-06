@@ -18,6 +18,57 @@ const DEFAULT_SHIPPER = {
 const DEFAULT_CUSTOMER_CODE = process.env.NAQEL_CUSTOMER_CODE || "";
 const DEFAULT_BRANCH_CODE = process.env.NAQEL_BRANCH_CODE || "";
 
+// Approximate USD rates for $10-12 threshold conversion (precision not critical)
+const USD_RATES: Record<string, number> = {
+  USD: 1, SAR: 3.75, AED: 3.67, KWD: 0.31, BHD: 0.376, QAR: 3.64,
+  OMR: 0.385, TRY: 38, EUR: 0.92, GBP: 0.79, EGP: 50, JOD: 0.71,
+};
+
+function usdToLocal(usd: number, currency: string): number {
+  return usd * (USD_RATES[currency.toUpperCase()] || 1);
+}
+
+// Country ISO2 → phone dialing code
+const COUNTRY_DIAL_CODES: Record<string, string> = {
+  AE: "971", SA: "966", KW: "965", BH: "973", QA: "974", OM: "968",
+  JO: "962", IQ: "964", EG: "20", LB: "961", MA: "212", ZA: "27",
+  TR: "90", US: "1", GB: "44", DE: "49", FR: "33", IN: "91",
+  PK: "92", CN: "86", JP: "81", KR: "82", RU: "7",
+};
+
+/**
+ * Sanitize phone number: strip ".00", non-digits, and ensure + prefix with country code.
+ */
+function sanitizePhone(raw: string, countryCode: string): string {
+  // Strip ".00" or ".0" suffix, then keep only digits and +
+  let phone = raw.replace(/\.0+$/, "").replace(/[^\d+]/g, "");
+  if (!phone) return "";
+
+  const dialCode = COUNTRY_DIAL_CODES[countryCode.toUpperCase()] || "";
+
+  // Already has + prefix → done
+  if (phone.startsWith("+")) return phone;
+
+  // Starts with country dial code → add +
+  if (dialCode && phone.startsWith(dialCode)) {
+    return "+" + phone;
+  }
+
+  // Starts with 00 + country code (international format) → replace 00 with +
+  if (dialCode && phone.startsWith("00" + dialCode)) {
+    return "+" + phone.substring(2);
+  }
+
+  // Local number → prepend +dialCode
+  if (dialCode) {
+    // Strip leading 0 (local format)
+    if (phone.startsWith("0")) phone = phone.substring(1);
+    return "+" + dialCode + phone;
+  }
+
+  return phone;
+}
+
 /**
  * Determine Naqel product type from origin/destination country.
  * Same country = domestic (DOMN), different = international (DLVI).
@@ -30,6 +81,7 @@ export function getProductType(originCountry: string, destCountry: string): stri
 }
 
 interface MapOptions {
+  carrier_code?: string;
   customer_code?: string;
   branch_code?: string;
   product_type?: string;
@@ -64,7 +116,8 @@ export function mapWooOrderToShipment(
   // Use shipping address, fall back to billing
   const addr = shipping.address_1 ? shipping : billing;
   const personName = `${addr.first_name} ${addr.last_name}`.trim();
-  const phone = addr.phone || billing.phone || "";
+  const rawPhone = addr.phone || billing.phone || "";
+  const phone = sanitizePhone(rawPhone, addr.country);
 
   // Determine customs currency and values
   const customsCurrency = options?.countryCurrency || order.currency;
@@ -76,8 +129,17 @@ export function mapWooOrderToShipment(
       ? options.convertedTotal / orderTotal
       : 1;
 
-  // Declared value multiplier (carrier-specific, only for COD orders)
-  const dvMultiplier = options?.declaredValueMultiplier ?? 1;
+  // COD check — determines which multiplier to use
+  const isCod = order.payment_method === "cod";
+
+  // Declared value multiplier:
+  // - COD: carrier-specific from config (e.g. 0.85 naqel, 0.8 smsa)
+  // - Credit card: always 25%
+  const dvMultiplier = isCod ? (options?.declaredValueMultiplier ?? 1) : 0.25;
+
+  // $10-12 USD threshold in destination currency (for credit card floor)
+  const min10Local = usdToLocal(10, customsCurrency);
+  const max12Local = usdToLocal(12, customsCurrency);
 
   // Build items from line_items
   const itemCount = order.line_items.length || 1;
@@ -85,12 +147,13 @@ export function mapWooOrderToShipment(
     let itemValue = Number(li.total) || li.price * li.quantity;
     let itemCustomsValue = Math.round(itemValue * conversionRatio * dvMultiplier * 100) / 100;
 
-    // If item value too low ($0.01 orders), distribute the minimum $10-12 across items
-    const minPerItem = (10 * conversionRatio) / itemCount;
-    if (itemCustomsValue < minPerItem) {
-      const minVal = (10 * conversionRatio) / itemCount;
-      const maxVal = (12 * conversionRatio) / itemCount;
-      itemCustomsValue = Math.round((minVal + Math.random() * (maxVal - minVal)) * 100) / 100;
+    // Credit card: if per-item value too low, apply $10-12 USD floor distributed across items
+    if (!isCod) {
+      const minPerItem = min10Local / itemCount;
+      if (itemCustomsValue < minPerItem) {
+        const maxPerItem = max12Local / itemCount;
+        itemCustomsValue = Math.round((minPerItem + Math.random() * (maxPerItem - minPerItem)) * 100) / 100;
+      }
     }
 
     return {
@@ -113,23 +176,21 @@ export function mapWooOrderToShipment(
   const descriptions = order.line_items.map((li) => li.name).join(", ");
   const descriptionOfGoods = descriptions.substring(0, 200) || "Cosmetic products";
 
-  // COD: if payment method is "cod"
-  const isCod = order.payment_method === "cod";
+  // COD amount (full order total in destination currency, no reduction)
   const codAmount = isCod
     ? Math.round(orderTotal * conversionRatio * 100) / 100
     : undefined;
 
-  // Customs declared value (total, in destination currency, with carrier multiplier)
-  // If value is under $10-equivalent (e.g. $0.01 placeholder orders), use random $10-12 converted to dest currency
+  // Customs declared value (total, in destination currency)
+  // COD: carrier config multiplier | Credit card: 25%
   let customsDeclaredValue =
     options?.convertedTotal != null
       ? Math.round(options.convertedTotal * dvMultiplier * 100) / 100
       : Math.round(orderTotal * dvMultiplier * 100) / 100;
 
-  if (customsDeclaredValue < 10 * conversionRatio) {
-    const minValue = 10 * conversionRatio;
-    const maxValue = 12 * conversionRatio;
-    customsDeclaredValue = Math.round((minValue + Math.random() * (maxValue - minValue)) * 100) / 100;
+  // Credit card: $10-12 USD minimum floor
+  if (!isCod && customsDeclaredValue < min10Local) {
+    customsDeclaredValue = Math.round((min10Local + Math.random() * (max12Local - min10Local)) * 100) / 100;
   }
 
   const shipper = options?.shipper || DEFAULT_SHIPPER;
@@ -140,6 +201,7 @@ export function mapWooOrderToShipment(
   return {
     woo_order_id: order.id,
     woo_order_number: order.number,
+    carrier_code: options?.carrier_code || "naqel",
     customer_code: options?.customer_code || DEFAULT_CUSTOMER_CODE,
     branch_code: options?.branch_code || DEFAULT_BRANCH_CODE,
     product_type: options?.product_type || getProductType(shipper.country_code, addr.country),

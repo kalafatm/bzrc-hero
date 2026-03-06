@@ -40,6 +40,11 @@ NAQEL_SUPPLIER_CODE = os.getenv("NAQEL_SUPPLIER_CODE", "NQL")
 NAQEL_CUSTOMER_CODE = os.getenv("NAQEL_CUSTOMER_CODE", "")
 NAQEL_BRANCH_CODE = os.getenv("NAQEL_BRANCH_CODE", "")
 
+# ---------- SMSA Express config ----------
+
+SMSA_BASE_URL = os.getenv("SMSA_BASE_URL", "https://ecomapis.smsaexpress.com")
+SMSA_API_KEY = os.getenv("SMSA_API_KEY", "")
+
 # ISO2 -> ISO3 country code mapping for shipper (Naqel requires ISO3 for shipper)
 COUNTRY_ISO2_TO_ISO3 = {
     "TR": "TUR", "SA": "SAU", "AE": "ARE", "GB": "GBR", "US": "USA",
@@ -239,10 +244,11 @@ class ExchangeRate(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
-# ---------- TCMB Exchange Rate Cache (in-memory + DB fallback) ----------
+# ---------- Exchange Rate Cache (Open Exchange Rates + DB fallback) ----------
 
-TCMB_URL = "https://www.tcmb.gov.tr/kurlar/today.xml"
-TCMB_CACHE_TTL = 4 * 60 * 60  # 4 hours in seconds
+OXR_APP_ID = os.getenv("OXR_APP_ID", "")
+OXR_URL = "https://openexchangerates.org/api/latest.json"
+RATES_CACHE_TTL = 4 * 60 * 60  # 4 hours in seconds
 
 # In-memory cache
 _rates_cache: Dict[str, float] = {}  # currency_code -> rate_to_usd
@@ -251,21 +257,66 @@ _rates_fetched_at: Optional[datetime] = None
 _rates_source_date: Optional[str] = None
 
 
+def _fetch_oxr_rates() -> Dict[str, dict]:
+    """Fetch current exchange rates from Open Exchange Rates (all currencies, USD base)."""
+    if not OXR_APP_ID:
+        raise ValueError("OXR_APP_ID not configured")
+
+    url = f"{OXR_URL}?app_id={OXR_APP_ID}"
+    req = urllib.request.Request(url, headers={"User-Agent": "bzrcMaster/1.0"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        import json as _json
+        data = _json.loads(resp.read())
+
+    oxr_rates = data.get("rates", {})
+    timestamp = data.get("timestamp", 0)
+    source_date = datetime.utcfromtimestamp(timestamp).strftime("%m/%d/%Y") if timestamp else ""
+
+    if "TRY" not in oxr_rates:
+        raise ValueError("TRY rate not found in OXR data")
+
+    try_per_usd = oxr_rates["TRY"]  # 1 USD = X TRY
+
+    rates = {}
+    for code, usd_rate in oxr_rates.items():
+        # usd_rate = 1 USD = X units of this currency
+        forex_buying_try = round(try_per_usd / usd_rate, 4) if usd_rate else None
+        rates[code] = {
+            "rate_to_usd": round(usd_rate, 6),
+            "forex_buying_try": forex_buying_try,
+            "forex_selling_try": None,
+            "unit": 1,
+            "source_date": source_date,
+        }
+
+    # Ensure USD entry
+    if "USD" not in rates:
+        rates["USD"] = {
+            "rate_to_usd": 1.0,
+            "forex_buying_try": try_per_usd,
+            "forex_selling_try": None,
+            "unit": 1,
+            "source_date": source_date,
+        }
+
+    return rates
+
+
 def _fetch_tcmb_rates() -> Dict[str, dict]:
-    """Fetch current exchange rates from TCMB XML feed."""
-    req = urllib.request.Request(TCMB_URL, headers={"User-Agent": "Mozilla/5.0"})
+    """Fetch exchange rates from TCMB XML feed (fallback, ~23 currencies)."""
+    req = urllib.request.Request(
+        "https://www.tcmb.gov.tr/kurlar/today.xml",
+        headers={"User-Agent": "Mozilla/5.0"},
+    )
     with urllib.request.urlopen(req, timeout=15) as resp:
         xml_data = resp.read()
 
     root = ET.fromstring(xml_data)
     source_date = root.attrib.get("Date", "")
 
-    rates = {}
-    # First, get USD TRY rate
     usd_forex_buying = None
     for currency in root.findall("Currency"):
-        code = currency.attrib.get("CurrencyCode", "")
-        if code == "USD":
+        if currency.attrib.get("CurrencyCode") == "USD":
             fb = currency.find("ForexBuying")
             if fb is not None and fb.text:
                 usd_forex_buying = float(fb.text)
@@ -274,52 +325,40 @@ def _fetch_tcmb_rates() -> Dict[str, dict]:
     if not usd_forex_buying:
         raise ValueError("USD rate not found in TCMB data")
 
-    # USD itself
-    rates["USD"] = {
-        "rate_to_usd": 1.0,
-        "forex_buying_try": usd_forex_buying,
-        "forex_selling_try": None,
-        "unit": 1,
-        "source_date": source_date,
+    rates = {
+        "USD": {
+            "rate_to_usd": 1.0,
+            "forex_buying_try": usd_forex_buying,
+            "forex_selling_try": None,
+            "unit": 1,
+            "source_date": source_date,
+        }
     }
 
-    # Parse all other currencies
     for currency in root.findall("Currency"):
         code = currency.attrib.get("CurrencyCode", "")
         if not code or code == "USD":
             continue
-
-        unit_el = currency.find("Unit")
-        unit = int(unit_el.text) if unit_el is not None and unit_el.text else 1
-
+        unit = int(currency.find("Unit").text) if currency.find("Unit") is not None and currency.find("Unit").text else 1
         fb = currency.find("ForexBuying")
-        fs = currency.find("ForexSelling")
         cross_usd = currency.find("CrossRateUSD")
-
         forex_buying = float(fb.text) if fb is not None and fb.text else None
-        forex_selling = float(fs.text) if fs is not None and fs.text else None
 
-        # Calculate rate: 1 USD = X units of this currency
         rate_to_usd = None
-
-        # Method 1: Use CrossRateUSD directly (preferred)
         if cross_usd is not None and cross_usd.text:
             rate_to_usd = float(cross_usd.text)
-
-        # Method 2: Calculate via TRY cross rate
-        if rate_to_usd is None and forex_buying and usd_forex_buying:
+        elif forex_buying and usd_forex_buying:
             rate_to_usd = (usd_forex_buying / forex_buying) * unit
 
         if rate_to_usd is not None:
             rates[code] = {
                 "rate_to_usd": round(rate_to_usd, 6),
                 "forex_buying_try": forex_buying,
-                "forex_selling_try": forex_selling,
+                "forex_selling_try": None,
                 "unit": unit,
                 "source_date": source_date,
             }
 
-    # TRY itself
     rates["TRY"] = {
         "rate_to_usd": round(usd_forex_buying, 6),
         "forex_buying_try": 1.0,
@@ -371,16 +410,35 @@ def _load_rates_from_db(db: Session) -> Dict[str, dict]:
 
 
 def refresh_rates(db: Session, force: bool = False) -> Dict[str, dict]:
-    """Refresh exchange rates: memory cache → TCMB → DB fallback."""
+    """Refresh exchange rates: memory cache → OXR → TCMB → DB fallback."""
     global _rates_cache, _rates_details, _rates_fetched_at, _rates_source_date
 
     now = datetime.utcnow()
 
     # Check memory cache
-    if not force and _rates_fetched_at and (now - _rates_fetched_at).total_seconds() < TCMB_CACHE_TTL:
+    if not force and _rates_fetched_at and (now - _rates_fetched_at).total_seconds() < RATES_CACHE_TTL:
         return _rates_details
 
-    # Try TCMB
+    # Try OXR first (170+ currencies)
+    if OXR_APP_ID:
+        try:
+            rates = _fetch_oxr_rates()
+            _rates_details = rates
+            _rates_cache = {k: v["rate_to_usd"] for k, v in rates.items()}
+            _rates_fetched_at = now
+            _rates_source_date = next(iter(rates.values()), {}).get("source_date")
+
+            try:
+                _save_rates_to_db(rates, db)
+            except Exception as e:
+                logger.warning(f"Failed to save rates to DB: {e}")
+
+            logger.info(f"OXR rates refreshed: {len(rates)} currencies, date={_rates_source_date}")
+            return rates
+        except Exception as e:
+            logger.warning(f"OXR fetch failed: {e}. Trying TCMB fallback...")
+
+    # Fallback: TCMB (~23 currencies)
     try:
         rates = _fetch_tcmb_rates()
         _rates_details = rates
@@ -388,7 +446,6 @@ def refresh_rates(db: Session, force: bool = False) -> Dict[str, dict]:
         _rates_fetched_at = now
         _rates_source_date = next(iter(rates.values()), {}).get("source_date")
 
-        # Save to DB
         try:
             _save_rates_to_db(rates, db)
         except Exception as e:
@@ -757,6 +814,138 @@ def build_naqel_payload(shipment: Shipment, items: list, awb_number: str = "") -
     return payload
 
 
+# ---------- SMSA API helpers ----------
+
+
+def build_smsa_payload(shipment: Shipment, items: list) -> dict:
+    """Build SMSA B2C shipment payload from our Shipment model."""
+    cod = float(shipment.cod_amount) if shipment.cod_amount else 0
+    declared = float(shipment.customs_declared_value) if shipment.customs_declared_value else 0
+
+    # Determine service code: EDDL = domestic, EIDL = international
+    shipper_cc = (shipment.shipper_country_code or "").upper()
+    consignee_cc = (shipment.consignee_country_code or "").upper()
+    is_domestic = shipper_cc == consignee_cc
+    service_code = "EDDL" if is_domestic else "EIDL"
+
+    payload = {
+        "ConsigneeAddress": {
+            "ContactName": (shipment.consignee_person_name or "Customer")[:150],
+            "ContactPhoneNumber": shipment.consignee_phone1 or "",
+            "Country": shipment.consignee_country_code,
+            "City": (shipment.consignee_city or "")[:50],
+            "AddressLine1": (shipment.consignee_line1 or "Address")[:100],
+            "AddressLine2": (shipment.consignee_line2 or "")[:100],
+            "District": shipment.consignee_district or "",
+            "PostalCode": shipment.consignee_post_code or "",
+        },
+        "ShipperAddress": {
+            "ContactName": (shipment.shipper_person_name or "Shipper")[:150],
+            "ContactPhoneNumber": shipment.shipper_phone1 or "",
+            "Country": shipment.shipper_country_code,
+            "City": (shipment.shipper_city or "")[:50],
+            "AddressLine1": (shipment.shipper_line1 or "Address")[:100],
+            "AddressLine2": (shipment.shipper_line2 or "")[:100],
+            "PostalCode": shipment.shipper_post_code or "",
+        },
+        "OrderNumber": str(shipment.woo_order_number or shipment.id)[:50],
+        "DeclaredValue": declared,
+        "CODAmount": cod,
+        "Parcels": shipment.number_of_pieces or 1,
+        "ShipDate": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
+        "ShipmentCurrency": shipment.customs_value_currency or "SAR",
+        "SMSARetailID": "0",
+        "WaybillType": "PDF",
+        "Weight": float(shipment.shipment_weight_value) if shipment.shipment_weight_value else 0.5,
+        "WeightUnit": "KG",
+        "ContentDescription": (shipment.description_of_goods or "Cosmetic products")[:200],
+        "VatPaid": True,
+        "DutyPaid": False,
+        "ServiceCode": service_code,
+    }
+
+    return payload
+
+
+async def submit_shipment_smsa(shipment: Shipment, items: list, db: Session):
+    """Submit shipment to SMSA Express API. Returns updated shipment."""
+    smsa_payload = build_smsa_payload(shipment, items)
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{SMSA_BASE_URL}/api/shipment/b2c/new",
+                json=smsa_payload,
+                headers={
+                    "apikey": SMSA_API_KEY,
+                    "Content-Type": "application/json",
+                },
+            )
+
+        carrier_response = None
+        try:
+            carrier_response = resp.json()
+        except Exception:
+            carrier_response = {"raw": resp.text[:2000]}
+
+        shipment.carrier_request_payload = smsa_payload
+        shipment.carrier_response_payload = carrier_response
+
+        if resp.status_code in (200, 201) and isinstance(carrier_response, dict):
+            sawb = carrier_response.get("sawb", "")
+            waybills = carrier_response.get("waybills") or []
+
+            if waybills:
+                awb = waybills[0].get("awb", sawb)
+                label_b64 = waybills[0].get("awbFile", "")
+            else:
+                awb = sawb
+                label_b64 = ""
+
+            if awb:
+                shipment.airwaybill_number = awb
+                shipment.tracking_number = awb
+                shipment.status = "submitted"
+                shipment.status_message = "Submitted to SMSA successfully"
+                shipment.last_status_change_at = datetime.utcnow()
+
+                if label_b64:
+                    shipment.label_base64 = label_b64
+
+                logger.info(f"Shipment {shipment.id} SMSA submitted: AWB={awb}")
+            else:
+                shipment.status = "submit_failed"
+                shipment.status_message = f"SMSA returned no AWB: {str(carrier_response)[:500]}"
+                shipment.last_status_change_at = datetime.utcnow()
+        else:
+            error_detail = str(carrier_response)[:500] if carrier_response else resp.text[:500]
+            shipment.status = "submit_failed"
+            shipment.status_message = f"SMSA HTTP {resp.status_code}: {error_detail}"
+            shipment.last_status_change_at = datetime.utcnow()
+            logger.error(f"Shipment {shipment.id} SMSA submit failed: HTTP {resp.status_code}")
+
+    except httpx.TimeoutException:
+        shipment.status = "submit_failed"
+        shipment.status_message = "SMSA API request timed out"
+        shipment.last_status_change_at = datetime.utcnow()
+    except Exception as e:
+        shipment.status = "submit_failed"
+        shipment.status_message = f"SMSA error: {str(e)[:500]}"
+        shipment.last_status_change_at = datetime.utcnow()
+
+
+async def track_shipment_smsa(awb: str) -> dict:
+    """Query SMSA shipment by AWB."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(
+            f"{SMSA_BASE_URL}/api/shipment/b2c/query/{awb}",
+            headers={"ApiKey": SMSA_API_KEY},
+        )
+    if resp.status_code in (200, 201):
+        return resp.json()
+    raise Exception(f"SMSA tracking HTTP {resp.status_code}: {resp.text[:300]}")
+
+
 # ---------- Pydantic schemas ----------
 
 
@@ -838,6 +1027,7 @@ class ShipmentBase(BaseModel):
     woo_order_id: Optional[int] = None
     woo_order_number: Optional[str] = None
 
+    carrier_code: Optional[str] = "naqel"
     customer_code: str
     branch_code: str
     product_type: str
@@ -875,9 +1065,11 @@ class ShipmentCreate(ShipmentBase):
 class ShipmentRead(ShipmentBase):
     id: int
     status: str
+    status_message: Optional[str] = None
     airwaybill_number: Optional[str] = None
     tracking_number: Optional[str] = None
     label_base64: Optional[str] = None
+    last_tracked_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     items: List[ShipmentItemRead] = []
@@ -893,14 +1085,17 @@ class ShipmentRead(ShipmentBase):
         return {
             "id": data.id,
             "status": data.status,
+            "status_message": data.status_message,
             "airwaybill_number": data.airwaybill_number,
             "tracking_number": data.tracking_number,
             "label_base64": data.label_base64,
+            "last_tracked_at": data.last_tracked_at,
             "created_at": data.created_at,
             "updated_at": data.updated_at,
             "items": getattr(data, "items", []),
             "woo_order_id": data.woo_order_id,
             "woo_order_number": data.woo_order_number,
+            "carrier_code": data.carrier_code,
             "customer_code": data.customer_code,
             "branch_code": data.branch_code,
             "product_type": data.product_type,
@@ -1008,12 +1203,13 @@ app = FastAPI(title="Shipping Integration Service")
 router = APIRouter(prefix="/shipments", tags=["shipments"])
 
 
-@router.post("/", response_model=ShipmentRead, status_code=status.HTTP_201_CREATED)
+@router.post("/shipment", response_model=ShipmentRead, status_code=status.HTTP_201_CREATED)
 def create_shipment_endpoint(payload: ShipmentCreate, db: Session = Depends(get_db)):
     """Create a shipment + items in DB."""
     shipment = Shipment(
         woo_order_id=payload.woo_order_id,
         woo_order_number=payload.woo_order_number,
+        carrier_code=payload.carrier_code or "naqel",
         customer_code=payload.customer_code,
         branch_code=payload.branch_code,
         product_type=payload.product_type,
@@ -1108,7 +1304,7 @@ def create_shipment_endpoint(payload: ShipmentCreate, db: Session = Depends(get_
     return shipment
 
 
-@router.get("/", response_model=List[ShipmentRead])
+@router.get("/shipment", response_model=List[ShipmentRead])
 def list_shipments_endpoint(
     status_filter: Optional[str] = None,
     woo_order_id: Optional[int] = None,
@@ -1128,11 +1324,13 @@ def list_shipments_endpoint(
 
     for shipment in shipments:
         shipment.items = db.query(ShipmentItem).filter(ShipmentItem.shipment_id == shipment.id).all()
+        # Strip label_base64 from list response (can be 300KB+ per shipment)
+        shipment.label_base64 = None
 
     return shipments
 
 
-@router.get("/{shipment_id}", response_model=ShipmentRead)
+@router.get("/shipment/{shipment_id}", response_model=ShipmentRead)
 def get_shipment_endpoint(shipment_id: int, db: Session = Depends(get_db)):
     """Get a single shipment with items."""
     shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
@@ -1143,23 +1341,55 @@ def get_shipment_endpoint(shipment_id: int, db: Session = Depends(get_db)):
     return shipment
 
 
-@router.patch("/{shipment_id}", response_model=ShipmentRead)
-async def update_shipment_endpoint(shipment_id: int, payload: dict):
-    """Partially update a shipment (placeholder)."""
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Not implemented yet")
+@router.patch("/shipment/{shipment_id}", response_model=ShipmentRead)
+async def update_shipment_endpoint(shipment_id: int, payload: dict, db: Session = Depends(get_db)):
+    """Partially update a shipment. Supports setting status to 'cancelled'."""
+    shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+    if not shipment:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    ALLOWED_FIELDS = {"status", "status_message"}
+    for key, value in payload.items():
+        if key not in ALLOWED_FIELDS:
+            continue
+        if key == "status" and value == "cancelled":
+            # Only allow cancelling shipments that haven't been delivered
+            if shipment.status == "delivered":
+                raise HTTPException(status_code=400, detail="Cannot cancel a delivered shipment")
+            shipment.status = "cancelled"
+            shipment.status_message = payload.get("status_message", "Cancelled by user")
+            shipment.last_status_change_at = func.now()
+        elif key == "status_message":
+            shipment.status_message = value
+
+    db.commit()
+    db.refresh(shipment)
+    shipment.items = db.query(ShipmentItem).filter(ShipmentItem.shipment_id == shipment_id).all()
+    return shipment
 
 
-@router.post("/{shipment_id}/submit", response_model=ShipmentRead)
+@router.delete("/shipment/{shipment_id}", status_code=204)
+async def delete_shipment_endpoint(shipment_id: int, db: Session = Depends(get_db)):
+    """Delete a shipment and its items. Only non-submitted shipments can be deleted."""
+    shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+    if not shipment:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    # Prevent deleting shipments that have been submitted to carrier
+    if shipment.airwaybill_number:
+        raise HTTPException(status_code=400, detail=f"Cannot delete submitted shipment (AWB: {shipment.airwaybill_number})")
+
+    db.query(ShipmentItem).filter(ShipmentItem.shipment_id == shipment_id).delete()
+    db.delete(shipment)
+    db.commit()
+    return None
+
+
+@router.post("/shipment/{shipment_id}/submit", response_model=ShipmentRead)
 async def submit_shipment_endpoint(shipment_id: int, db: Session = Depends(get_db)):
     """
-    Submit a shipment to Naqel via GN Connect API.
-    1. Read shipment from DB
-    2. Get bearer token from GN Connect
-    3. Build payload and call Shipments endpoint
-    4. Store request/response, update AWB/status/label
-    5. Return updated shipment
+    Submit a shipment to carrier (Naqel or SMSA) based on carrier_code.
     """
-    # 1. Get shipment from DB
     shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
     if not shipment:
         raise HTTPException(status_code=404, detail="Shipment not found")
@@ -1169,103 +1399,104 @@ async def submit_shipment_endpoint(shipment_id: int, db: Session = Depends(get_d
 
     items = db.query(ShipmentItem).filter(ShipmentItem.shipment_id == shipment_id).all()
 
-    # 2. Get Naqel token
-    token = await get_naqel_token()
+    carrier = (shipment.carrier_code or "naqel").lower()
 
-    # 3. Allocate AWB and submit with retry on "already exists"
-    url = f"{NAQEL_BASE_URL}/api/gnconnect/Shipments"
-    max_retries = 10
-    last_error = None
+    if carrier == "smsa":
+        # ---------- SMSA submit ----------
+        await submit_shipment_smsa(shipment, items, db)
+    elif carrier in ("naqel", "gn_connect"):
+        # ---------- Naqel / GN Connect submit ----------
+        token = await get_naqel_token()
+        url = f"{NAQEL_BASE_URL}/api/gnconnect/Shipments"
+        max_retries = 10
+        last_error = None
 
-    for attempt in range(max_retries):
-        awb_number = get_next_awb(db)
-        naqel_payload = build_naqel_payload(shipment, items, awb_number=awb_number)
+        for attempt in range(max_retries):
+            awb_number = get_next_awb(db)
+            naqel_payload = build_naqel_payload(shipment, items, awb_number=awb_number)
 
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(
-                    url,
-                    json=naqel_payload,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json",
-                    },
-                )
-
-            carrier_response = None
             try:
-                carrier_response = resp.json()
-            except Exception:
-                carrier_response = {"raw": resp.text[:2000]}
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    resp = await client.post(
+                        url,
+                        json=naqel_payload,
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": "application/json",
+                        },
+                    )
 
-            # Store request/response regardless of outcome
-            shipment.carrier_request_payload = naqel_payload
-            shipment.carrier_response_payload = carrier_response
+                carrier_response = None
+                try:
+                    carrier_response = resp.json()
+                except Exception:
+                    carrier_response = {"raw": resp.text[:2000]}
 
-            # Check for "already exists" → retry with next AWB
-            if isinstance(carrier_response, dict):
-                errors = carrier_response.get("errors") or []
-                msg = carrier_response.get("message") or ""
-                is_awb_exists = (
-                    (isinstance(errors, list) and any("already exists" in str(e).lower() for e in errors)) or
-                    "already exists" in msg.lower()
-                )
-                if is_awb_exists:
-                    logger.info(f"Shipment {shipment_id} AWB {awb_number} already exists, retrying ({attempt+1}/{max_retries})")
-                    last_error = f"AWB {awb_number} already exists"
-                    continue
+                shipment.carrier_request_payload = naqel_payload
+                shipment.carrier_response_payload = carrier_response
 
-            # Check for success (Naqel returns 200 or 201)
-            if resp.status_code in (200, 201) and isinstance(carrier_response, dict):
-                naqel_status = carrier_response.get("status", "")
+                if isinstance(carrier_response, dict):
+                    errors = carrier_response.get("errors") or []
+                    msg = carrier_response.get("message") or ""
+                    is_awb_exists = (
+                        (isinstance(errors, list) and any("already exists" in str(e).lower() for e in errors)) or
+                        "already exists" in msg.lower()
+                    )
+                    if is_awb_exists:
+                        logger.info(f"Shipment {shipment_id} AWB {awb_number} already exists, retrying ({attempt+1}/{max_retries})")
+                        last_error = f"AWB {awb_number} already exists"
+                        continue
 
-                if naqel_status == "Success":
-                    resp_awb = carrier_response.get("airwaybill", "") or awb_number
-                    label_b64 = carrier_response.get("shipmentLabel", "")
+                if resp.status_code in (200, 201) and isinstance(carrier_response, dict):
+                    naqel_status = carrier_response.get("status", "")
 
-                    shipment.airwaybill_number = resp_awb
-                    shipment.tracking_number = resp_awb
-                    shipment.status = "submitted"
-                    shipment.status_message = "Submitted to Naqel successfully"
-                    shipment.last_status_change_at = datetime.utcnow()
+                    if naqel_status == "Success":
+                        resp_awb = carrier_response.get("airwaybill", "") or awb_number
+                        label_b64 = carrier_response.get("shipmentLabel", "")
 
-                    if label_b64:
-                        shipment.label_base64 = label_b64
+                        shipment.airwaybill_number = resp_awb
+                        shipment.tracking_number = resp_awb
+                        shipment.status = "submitted"
+                        shipment.status_message = "Submitted to Naqel successfully"
+                        shipment.last_status_change_at = datetime.utcnow()
 
-                    logger.info(f"Shipment {shipment_id} submitted: AWB={resp_awb} (attempt {attempt+1})")
-                    break
+                        if label_b64:
+                            shipment.label_base64 = label_b64
+
+                        logger.info(f"Shipment {shipment_id} submitted: AWB={resp_awb} (attempt {attempt+1})")
+                        break
+                    else:
+                        error_msg = carrier_response.get("message") or carrier_response.get("detail") or str(carrier_response)
+                        shipment.status = "submit_failed"
+                        shipment.status_message = f"Naqel error: {error_msg[:500]}"
+                        shipment.last_status_change_at = datetime.utcnow()
+                        logger.warning(f"Shipment {shipment_id} Naqel error: {error_msg}")
+                        break
                 else:
-                    # Naqel returned 200 but with non-AWB error (real failure)
-                    error_msg = carrier_response.get("message") or carrier_response.get("detail") or str(carrier_response)
+                    error_detail = str(carrier_response)[:500] if carrier_response else resp.text[:500]
                     shipment.status = "submit_failed"
-                    shipment.status_message = f"Naqel error: {error_msg[:500]}"
+                    shipment.status_message = f"Naqel HTTP {resp.status_code}: {error_detail}"
                     shipment.last_status_change_at = datetime.utcnow()
-                    logger.warning(f"Shipment {shipment_id} Naqel error: {error_msg}")
+                    logger.error(f"Shipment {shipment_id} submit failed: HTTP {resp.status_code}")
                     break
-            else:
-                error_detail = str(carrier_response)[:500] if carrier_response else resp.text[:500]
-                shipment.status = "submit_failed"
-                shipment.status_message = f"Naqel HTTP {resp.status_code}: {error_detail}"
-                shipment.last_status_change_at = datetime.utcnow()
-                logger.error(f"Shipment {shipment_id} submit failed: HTTP {resp.status_code}")
-                break
 
-        except httpx.TimeoutException:
+            except httpx.TimeoutException:
+                shipment.status = "submit_failed"
+                shipment.status_message = "Naqel API request timed out"
+                shipment.last_status_change_at = datetime.utcnow()
+                break
+            except Exception as e:
+                shipment.status = "submit_failed"
+                shipment.status_message = f"Error: {str(e)[:500]}"
+                shipment.last_status_change_at = datetime.utcnow()
+                break
+        else:
             shipment.status = "submit_failed"
-            shipment.status_message = "Naqel API request timed out"
+            shipment.status_message = f"AWB allocation failed after {max_retries} attempts: {last_error}"
             shipment.last_status_change_at = datetime.utcnow()
-            break
-        except Exception as e:
-            shipment.status = "submit_failed"
-            shipment.status_message = f"Error: {str(e)[:500]}"
-            shipment.last_status_change_at = datetime.utcnow()
-            break
+            logger.error(f"Shipment {shipment_id}: AWB exhausted after {max_retries} retries")
     else:
-        # All retries exhausted
-        shipment.status = "submit_failed"
-        shipment.status_message = f"AWB allocation failed after {max_retries} attempts: {last_error}"
-        shipment.last_status_change_at = datetime.utcnow()
-        logger.error(f"Shipment {shipment_id}: AWB exhausted after {max_retries} retries")
+        raise HTTPException(status_code=400, detail=f"Unknown carrier: {carrier}")
 
     db.commit()
     db.refresh(shipment)
@@ -1277,7 +1508,7 @@ async def submit_shipment_endpoint(shipment_id: int, db: Session = Depends(get_d
 # ---------- Label download endpoint ----------
 
 
-@router.get("/{shipment_id}/label")
+@router.get("/shipment/{shipment_id}/label")
 async def get_label_endpoint(shipment_id: int, db: Session = Depends(get_db)):
     """Download the shipment label as PDF.
 
@@ -1292,47 +1523,51 @@ async def get_label_endpoint(shipment_id: int, db: Session = Depends(get_db)):
     if not shipment.airwaybill_number:
         raise HTTPException(status_code=404, detail="No AWB — shipment not yet submitted")
 
-    # Try the dedicated LabelPrint endpoint for proper Naqel label layout
+    carrier = (shipment.carrier_code or "naqel").lower()
     label_b64 = None
-    try:
-        token = await get_naqel_token()
-        url = f"{NAQEL_BASE_URL}/api/gnconnect/Shipments/LabelPrint"
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json={
-                "airwaybills": [shipment.airwaybill_number],
-                "labelFormat": "PDF",
-                "labelSize": "4X6",
-                "customerCode": shipment.customer_code or NAQEL_CUSTOMER_CODE,
-                "branchCode": shipment.branch_code or NAQEL_BRANCH_CODE,
-            }, headers={
-                "Authorization": f"token {token}",
-                "Content-Type": "application/json",
-            })
-            if resp.status_code in (200, 201):
-                data = resp.json()
-                # Response may contain base64 label directly or in a field
-                if isinstance(data, str) and len(data) > 100:
-                    label_b64 = data
-                elif isinstance(data, dict):
-                    label_b64 = data.get("shipmentLabel") or data.get("label") or data.get("labelData") or ""
-                elif isinstance(data, list) and len(data) > 0:
-                    item = data[0]
-                    if isinstance(item, str) and len(item) > 100:
-                        label_b64 = item
-                    elif isinstance(item, dict):
-                        label_b64 = item.get("shipmentLabel") or item.get("label") or item.get("labelData") or ""
 
-                if label_b64:
-                    # Update stored label with the proper one
-                    shipment.label_base64 = label_b64
-                    db.commit()
-                    logger.info(f"Label refreshed from LabelPrint for shipment {shipment_id}")
-    except Exception as e:
-        logger.warning(f"LabelPrint API call failed for shipment {shipment_id}: {e}")
-
-    # Fall back to stored label
-    if not label_b64:
+    if carrier == "smsa":
+        # SMSA: label was stored during submit (no separate endpoint)
         label_b64 = shipment.label_base64
+    else:
+        # Naqel: try dedicated LabelPrint endpoint for proper layout
+        try:
+            token = await get_naqel_token()
+            url = f"{NAQEL_BASE_URL}/api/gnconnect/Shipments/LabelPrint"
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(url, json={
+                    "airwaybills": [shipment.airwaybill_number],
+                    "labelFormat": "PDF",
+                    "labelSize": "4X6",
+                    "customerCode": shipment.customer_code or NAQEL_CUSTOMER_CODE,
+                    "branchCode": shipment.branch_code or NAQEL_BRANCH_CODE,
+                }, headers={
+                    "Authorization": f"token {token}",
+                    "Content-Type": "application/json",
+                })
+                if resp.status_code in (200, 201):
+                    data = resp.json()
+                    if isinstance(data, str) and len(data) > 100:
+                        label_b64 = data
+                    elif isinstance(data, dict):
+                        label_b64 = data.get("shipmentLabel") or data.get("label") or data.get("labelData") or ""
+                    elif isinstance(data, list) and len(data) > 0:
+                        item = data[0]
+                        if isinstance(item, str) and len(item) > 100:
+                            label_b64 = item
+                        elif isinstance(item, dict):
+                            label_b64 = item.get("shipmentLabel") or item.get("label") or item.get("labelData") or ""
+
+                    if label_b64:
+                        shipment.label_base64 = label_b64
+                        db.commit()
+                        logger.info(f"Label refreshed from LabelPrint for shipment {shipment_id}")
+        except Exception as e:
+            logger.warning(f"LabelPrint API call failed for shipment {shipment_id}: {e}")
+
+        # Fall back to stored label
+        if not label_b64:
+            label_b64 = shipment.label_base64
 
     if not label_b64:
         raise HTTPException(status_code=404, detail="No label available for this shipment")
@@ -1365,12 +1600,17 @@ async def bulk_track_endpoint(db: Session = Depends(get_db)):
     if not trackable:
         return BulkTrackingResult(total_tracked=0, updated=0, errors=0)
 
-    token = await get_naqel_token()
+    # Get Naqel token only if there are Naqel shipments
+    naqel_shipments = [s for s in trackable if (s.carrier_code or "naqel").lower() in ("naqel", "gn_connect")]
+    smsa_shipments = [s for s in trackable if (s.carrier_code or "").lower() == "smsa"]
+    token = await get_naqel_token() if naqel_shipments else None
+
     updated = 0
     errors = 0
     details = []
 
-    for shipment in trackable:
+    # Track Naqel shipments
+    for shipment in naqel_shipments:
         try:
             raw = await track_shipment_gn(
                 shipment.airwaybill_number,
@@ -1403,11 +1643,32 @@ async def bulk_track_endpoint(db: Session = Depends(get_db)):
             })
             logger.warning(f"Track {shipment.airwaybill_number} failed: {e}")
 
+    # Track SMSA shipments
+    for shipment in smsa_shipments:
+        try:
+            smsa_data = await track_shipment_smsa(shipment.airwaybill_number)
+            shipment.status_message = f"SMSA query OK"
+            shipment.last_tracked_at = datetime.utcnow()
+            details.append({
+                "shipment_id": shipment.id,
+                "awb": shipment.airwaybill_number,
+                "new_events": 0,
+                "status": shipment.status,
+            })
+        except Exception as e:
+            errors += 1
+            details.append({
+                "shipment_id": shipment.id,
+                "awb": shipment.airwaybill_number,
+                "error": str(e)[:200],
+            })
+            logger.warning(f"SMSA track {shipment.airwaybill_number} failed: {e}")
+
     db.commit()
     return BulkTrackingResult(total_tracked=len(trackable), updated=updated, errors=errors, details=details)
 
 
-@router.post("/{shipment_id}/track", response_model=TrackingResponse)
+@router.post("/shipment/{shipment_id}/track", response_model=TrackingResponse)
 async def track_shipment_endpoint(shipment_id: int, db: Session = Depends(get_db)):
     """Track a single shipment via GN Connect API."""
     shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
@@ -1434,20 +1695,30 @@ async def track_shipment_endpoint(shipment_id: int, db: Session = Depends(get_db
             last_tracked_at=shipment.last_tracked_at,
         )
 
-    # Call GN Connect
-    token = await get_naqel_token()
-    raw = await track_shipment_gn(
-        shipment.airwaybill_number, shipment.customer_code, shipment.branch_code, token,
-    )
+    carrier = (shipment.carrier_code or "naqel").lower()
 
-    new_status, status_msg, parsed_events = parse_tracking_response(raw)
-    _store_tracking_events(db, shipment.id, shipment.airwaybill_number, parsed_events)
+    if carrier == "smsa":
+        # SMSA: query by AWB — returns shipment data, not event timeline
+        try:
+            await track_shipment_smsa(shipment.airwaybill_number)
+            shipment.status_message = "SMSA query OK"
+        except Exception as e:
+            shipment.status_message = f"SMSA tracking error: {str(e)[:200]}"
+            logger.warning(f"SMSA track {shipment.airwaybill_number}: {e}")
+    else:
+        # Naqel / GN Connect
+        token = await get_naqel_token()
+        raw = await track_shipment_gn(
+            shipment.airwaybill_number, shipment.customer_code, shipment.branch_code, token,
+        )
 
-    # Update status if changed
-    if new_status and new_status != shipment.status:
-        shipment.status = new_status
-        shipment.status_message = status_msg
-        shipment.last_status_change_at = datetime.utcnow()
+        new_status, status_msg, parsed_events = parse_tracking_response(raw)
+        _store_tracking_events(db, shipment.id, shipment.airwaybill_number, parsed_events)
+
+        if new_status and new_status != shipment.status:
+            shipment.status = new_status
+            shipment.status_message = status_msg
+            shipment.last_status_change_at = datetime.utcnow()
 
     shipment.last_tracked_at = datetime.utcnow()
     db.commit()
@@ -1469,7 +1740,7 @@ async def track_shipment_endpoint(shipment_id: int, db: Session = Depends(get_db
     )
 
 
-@router.get("/{shipment_id}/tracking-events", response_model=List[TrackingEventRead])
+@router.get("/shipment/{shipment_id}/tracking-events", response_model=List[TrackingEventRead])
 def get_tracking_events_endpoint(shipment_id: int, db: Session = Depends(get_db)):
     """Get cached tracking events (no external API call)."""
     shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
@@ -1510,10 +1781,12 @@ async def tracking_poller():
                     logger.info("No trackable shipments found")
                     continue
 
-                token = await get_naqel_token()
+                naqel_list = [s for s in trackable if (s.carrier_code or "naqel").lower() in ("naqel", "gn_connect")]
+                smsa_list = [s for s in trackable if (s.carrier_code or "").lower() == "smsa"]
+                token = await get_naqel_token() if naqel_list else None
                 updated_count = 0
 
-                for shipment in trackable:
+                for shipment in naqel_list:
                     try:
                         raw = await track_shipment_gn(
                             shipment.airwaybill_number,
@@ -1533,6 +1806,13 @@ async def tracking_poller():
                         shipment.last_tracked_at = datetime.utcnow()
                     except Exception as e:
                         logger.warning(f"Auto-track {shipment.airwaybill_number}: {e}")
+
+                for shipment in smsa_list:
+                    try:
+                        await track_shipment_smsa(shipment.airwaybill_number)
+                        shipment.last_tracked_at = datetime.utcnow()
+                    except Exception as e:
+                        logger.warning(f"Auto-track SMSA {shipment.airwaybill_number}: {e}")
 
                 db.commit()
                 logger.info(f"Auto-tracking poll done: {len(trackable)} checked, {updated_count} updated")
@@ -1588,7 +1868,7 @@ def convert_endpoint(
     to_currency: str = Query(..., alias="to", description="Target currency code"),
     db: Session = Depends(get_db),
 ):
-    """Convert an amount between currencies using TCMB rates."""
+    """Convert an amount between currencies."""
     converted = convert_currency(amount, from_currency, to_currency, db)
     return {
         "amount": amount,
@@ -1601,7 +1881,7 @@ def convert_endpoint(
 
 @exchange_router.post("/refresh")
 def refresh_endpoint(db: Session = Depends(get_db)):
-    """Force refresh exchange rates from TCMB."""
+    """Force refresh exchange rates (OXR primary, TCMB fallback)."""
     rates = refresh_rates(db, force=True)
     return {
         "message": "Rates refreshed",

@@ -3,6 +3,7 @@ import {
   createShipment,
   listShipments,
   submitShipment,
+  updateShipment,
 } from "@/lib/api/shipping-client";
 import { getOrder, updateOrder } from "@/lib/api/woo-client";
 import { mapWooOrderToShipment } from "@/lib/api/woo-to-shipment";
@@ -56,12 +57,9 @@ async function getCountryCurrencyMap(
   return map;
 }
 
-// Simple exchange rate fetch (reuses same API as /api/exchange-rates)
-const rateCache = new Map<
-  string,
-  { rates: Record<string, number>; fetchedAt: number }
->();
-const CACHE_TTL = 60 * 60 * 1000;
+// Currency conversion via backend TCMB-based exchange rates
+const SHIPPING_API_URL =
+  process.env.SHIPPING_API_URL || "https://dev.bazaarica.com";
 
 async function convertCurrency(
   from: string,
@@ -69,26 +67,13 @@ async function convertCurrency(
   amount: number
 ): Promise<number | null> {
   try {
-    const now = Date.now();
-    const cached = rateCache.get(from);
-    let rates: Record<string, number>;
-
-    if (cached && now - cached.fetchedAt < CACHE_TTL) {
-      rates = cached.rates;
-    } else {
-      const res = await fetch(
-        `https://open.er-api.com/v6/latest/${from}`,
-        { signal: AbortSignal.timeout(10_000) }
-      );
-      if (!res.ok) return null;
-      const data = (await res.json()) as { rates: Record<string, number> };
-      rateCache.set(from, { rates: data.rates, fetchedAt: now });
-      rates = data.rates;
-    }
-
-    const rate = rates[to];
-    if (rate == null) return null;
-    return Math.round(amount * rate * 100) / 100;
+    const res = await fetch(
+      `${SHIPPING_API_URL}/exchange-rates/convert?amount=${amount}&from=${from}&to=${to}`,
+      { signal: AbortSignal.timeout(10_000) }
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { converted: number };
+    return data.converted;
   } catch {
     return null;
   }
@@ -139,23 +124,26 @@ export async function POST(req: NextRequest) {
         // 3. Check for existing shipment (prevent duplicates)
         const existing = await listShipments({
           woo_order_id: orderId,
-          limit: 1,
+          limit: 10,
         });
-        if (existing.length > 0) {
-          const s = existing[0];
-          if (
+        const activeShipment = existing.find(
+          (s) =>
             s.status !== "submit_failed" &&
             s.status !== "failed" &&
             s.status !== "cancelled"
-          ) {
-            result.status = "skipped";
-            result.shipmentId = s.id;
-            result.awb = s.airwaybill_number || undefined;
-            result.error = `Shipment #${s.id} already exists (${s.status})`;
-            results.push(result);
-            continue;
-          }
+        );
+        if (activeShipment) {
+          result.status = "skipped";
+          result.shipmentId = activeShipment.id;
+          result.awb = activeShipment.airwaybill_number || undefined;
+          result.error = `Shipment #${activeShipment.id} already exists (${activeShipment.status})`;
+          results.push(result);
+          continue;
         }
+        // Track old failed shipments for auto-cleanup after success
+        const oldFailed = existing.filter(
+          (s) => s.status === "submit_failed" || s.status === "failed"
+        );
 
         // 4. Validate exit route
         const destCountry = (
@@ -170,6 +158,17 @@ export async function POST(req: NextRequest) {
           result.error = `No exit route for ${shipperCountry} → ${destCountry}`;
           results.push(result);
           continue;
+        }
+
+        // 4b. SMSA country restriction
+        if (carrier === "smsa") {
+          const SMSA_COUNTRIES = new Set(["SA","BH","EG","KW","AE","JO","OM","QA","ZA","US"]);
+          if (!SMSA_COUNTRIES.has(destCountry)) {
+            result.status = "skipped";
+            result.error = `SMSA does not support destination ${destCountry}. Supported: SA, BH, EG, KW, AE, JO, OM, QA, ZA, US`;
+            results.push(result);
+            continue;
+          }
         }
 
         // 5. City match: use saved bzrc_city_code or auto-match
@@ -229,6 +228,9 @@ export async function POST(req: NextRequest) {
           );
           if (converted != null) {
             convertedTotal = converted;
+          } else {
+            // Conversion failed (unsupported currency) — fall back to order currency
+            countryCurrency = wooOrder.currency;
           }
         }
 
@@ -276,6 +278,18 @@ export async function POST(req: NextRequest) {
           result.status = "error";
           result.error =
             submitted.status_message || "Submit failed at carrier";
+        } else {
+          // Auto-cleanup: cancel old failed shipments for this order
+          for (const old of oldFailed) {
+            try {
+              await updateShipment(old.id, {
+                status: "cancelled",
+                status_message: `Superseded by shipment #${submitted.id}`,
+              } as Record<string, unknown>);
+            } catch {
+              // Non-fatal
+            }
+          }
         }
       } catch (err) {
         result.status = "error";

@@ -12,6 +12,8 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "fastest-levenshtein": "^1.0.16",
+    "jspdf": "^4.2.0",
+    "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.563.0",
     "next": "16.1.6",
     "radix-ui": "^1.4.3",
