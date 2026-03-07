@@ -11,6 +11,7 @@ import { matchCity } from "@/lib/api/city-matcher";
 import {
   getCarrierConfig,
   getExitLocation,
+  getExitLocationByCode,
   getNaqelCityCodes,
 } from "@/lib/api/google-sheets";
 
@@ -145,17 +146,24 @@ export async function POST(req: NextRequest) {
           (s) => s.status === "submit_failed" || s.status === "failed"
         );
 
-        // 4. Validate exit route
+        // 4. Exit location from WC order meta (bzrc_Naqel_Exit_Location = code like RUH, IST)
+        const exitLocationMeta = (wooOrder.meta_data || []).find(
+          (m: { key: string; value: string }) => m.key === "bzrc_Naqel_Exit_Location"
+        );
+        const exitLocationCode = (exitLocationMeta?.value || "").toUpperCase();
+
         const destCountry = (
           wooOrder.shipping?.country ||
           wooOrder.billing?.country ||
           ""
         ).toUpperCase();
-        const shipperCountry = "TR"; // Default origin
-        const exitRoute = await getExitLocation(shipperCountry, destCountry);
+        const exitRoute = exitLocationCode
+          ? await getExitLocationByCode(exitLocationCode, destCountry)
+          : await getExitLocation("TR", destCountry);
         if (!exitRoute) {
+          const origin = exitLocationCode || "TR";
           result.status = "skipped";
-          result.error = `No exit route for ${shipperCountry} → ${destCountry}`;
+          result.error = `No exit route for ${origin} → ${destCountry}`;
           results.push(result);
           continue;
         }
@@ -172,39 +180,56 @@ export async function POST(req: NextRequest) {
         }
 
         // 5. City match: use saved bzrc_city_code or auto-match
-        const savedCityCode = (wooOrder.meta_data || []).find(
-          (m: { key: string; value: string }) => m.key === "bzrc_city_code"
-        )?.value;
-        let cityCode = savedCityCode || "";
+        let cityCode = "";
         let countryCurrency =
           (wooOrder.meta_data || []).find(
             (m: { key: string; value: string }) =>
               m.key === "bzrc_country_currency"
           )?.value || "";
 
-        if (!cityCode) {
-          const cityName =
-            wooOrder.shipping?.city || wooOrder.billing?.city || "";
-          if (!cityName) {
+        if (carrier === "dhl") {
+          // DHL: no city code lookup needed, use WC city name directly
+          cityCode = wooOrder.shipping?.city || wooOrder.billing?.city || "";
+          if (!cityCode) {
             result.status = "skipped";
             result.error = "No city in order address";
             results.push(result);
             continue;
           }
-          const cityResult = await matchCity(destCountry, cityName, cities);
-          if (
-            cityResult.confidence === "none" ||
-            !cityResult.matchedCity
-          ) {
-            result.status = "skipped";
-            result.error = `City match failed for "${cityName}" in ${destCountry} (confidence: ${cityResult.confidence})`;
-            results.push(result);
-            continue;
-          }
-          cityCode = cityResult.matchedCity.cityCode;
           if (!countryCurrency) {
-            countryCurrency =
-              cityResult.matchedCity.countryCurrency || "";
+            countryCurrency = ccMap[destCountry] || wooOrder.currency;
+          }
+        } else {
+          // Naqel / SMSA: city code matching required
+          const savedCityCode = (wooOrder.meta_data || []).find(
+            (m: { key: string; value: string }) => m.key === "bzrc_city_code"
+          )?.value;
+          cityCode = savedCityCode || "";
+
+          if (!cityCode) {
+            const cityName =
+              wooOrder.shipping?.city || wooOrder.billing?.city || "";
+            if (!cityName) {
+              result.status = "skipped";
+              result.error = "No city in order address";
+              results.push(result);
+              continue;
+            }
+            const cityResult = await matchCity(destCountry, cityName, cities);
+            if (
+              cityResult.confidence === "none" ||
+              !cityResult.matchedCity
+            ) {
+              result.status = "skipped";
+              result.error = `City match failed for "${cityName}" in ${destCountry} (confidence: ${cityResult.confidence})`;
+              results.push(result);
+              continue;
+            }
+            cityCode = cityResult.matchedCity.cityCode;
+            if (!countryCurrency) {
+              countryCurrency =
+                cityResult.matchedCity.countryCurrency || "";
+            }
           }
         }
 
@@ -235,8 +260,9 @@ export async function POST(req: NextRequest) {
         }
 
         // 7. Get carrier config for declared value multiplier (COD)
+        // DHL does not support COD — skip multiplier
         let declaredValueMultiplier: number | undefined;
-        if (wooOrder.payment_method === "cod") {
+        if (carrier !== "dhl" && wooOrder.payment_method === "cod") {
           const carrierCfg = await getCarrierConfig(carrier);
           if (carrierCfg) {
             declaredValueMultiplier = carrierCfg.declaredValueMultiplier;
@@ -249,6 +275,7 @@ export async function POST(req: NextRequest) {
           countryCurrency: countryCurrency || undefined,
           convertedTotal,
           declaredValueMultiplier,
+          originCityCode: exitRoute.exitLocationCode,
         });
 
         // 9. Create shipment in DB

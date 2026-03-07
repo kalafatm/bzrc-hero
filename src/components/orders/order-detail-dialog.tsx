@@ -228,8 +228,14 @@ export function OrderDetailDialog(props: OrderDetailDialogProps) {
                 translating={translating}
               />
 
-              {/* City Code Match Section */}
+              {/* City Code Match Section — not needed for DHL */}
               <Separator />
+              {selectedCarrier === "dhl" ? (
+                <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-700">
+                  <Check className="size-3.5 inline mr-1" />
+                  DHL uses city name directly — no city code matching required
+                </div>
+              ) : (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-semibold">
@@ -341,6 +347,7 @@ export function OrderDetailDialog(props: OrderDetailDialogProps) {
                   </div>
                 )}
               </div>
+              )}
 
               <Separator />
 
@@ -490,21 +497,23 @@ export function OrderDetailDialog(props: OrderDetailDialogProps) {
                   <div>
                     {editedShipping?.city}, {editedShipping?.country}
                   </div>
-                  <div className="text-muted-foreground">City Code</div>
+                  <div className="text-muted-foreground">{selectedCarrier === "dhl" ? "City" : "City Code"}</div>
                   <div>
-                    {manualCityCode
-                      ? manualCityCode
-                      : cityMatch?.carrier === "smsa"
-                        ? cityMatch.smsaCity && cityMatch.confidence !== "none"
-                          ? cityMatch.smsaCity
-                          : cityMatch?.confidence === "none"
-                            ? <span className="text-red-600">Low confidence ({Math.round((cityMatch?.score || 0) * 100)}%)</span>
-                            : <span className="text-orange-600">Not matched yet</span>
-                        : cityMatch?.matchedCity && cityMatch.confidence !== "none"
-                          ? cityMatch.matchedCity.cityCode
-                          : cityMatch?.confidence === "none"
-                            ? <span className="text-red-600">Low confidence ({Math.round((cityMatch?.score || 0) * 100)}%)</span>
-                            : <span className="text-orange-600">Not matched yet</span>
+                    {selectedCarrier === "dhl"
+                      ? editedShipping?.city || <span className="text-orange-600">No city</span>
+                      : manualCityCode
+                        ? manualCityCode
+                        : cityMatch?.carrier === "smsa"
+                          ? cityMatch.smsaCity && cityMatch.confidence !== "none"
+                            ? cityMatch.smsaCity
+                            : cityMatch?.confidence === "none"
+                              ? <span className="text-red-600">Low confidence ({Math.round((cityMatch?.score || 0) * 100)}%)</span>
+                              : <span className="text-orange-600">Not matched yet</span>
+                          : cityMatch?.matchedCity && cityMatch.confidence !== "none"
+                            ? cityMatch.matchedCity.cityCode
+                            : cityMatch?.confidence === "none"
+                              ? <span className="text-red-600">Low confidence ({Math.round((cityMatch?.score || 0) * 100)}%)</span>
+                              : <span className="text-orange-600">Not matched yet</span>
                     }
                   </div>
                   <div className="text-muted-foreground">Carrier</div>
@@ -545,12 +554,15 @@ export function OrderDetailDialog(props: OrderDetailDialogProps) {
 
               {/* Validation warnings */}
               {(() => {
-                const hasCityCode = !!manualCityCode || (
-                  cityMatch?.carrier === "smsa"
-                    ? !!cityMatch?.smsaCity && cityMatch.confidence !== "none"
-                    : !!cityMatch?.matchedCity && cityMatch.confidence !== "none"
-                );
-                const hasLowConfidence = cityMatch?.confidence === "none" && !manualCityCode;
+                const isDhl = selectedCarrier === "dhl";
+                const hasCityCode = isDhl
+                  ? !!(editedShipping?.city)
+                  : !!manualCityCode || (
+                      cityMatch?.carrier === "smsa"
+                        ? !!cityMatch?.smsaCity && cityMatch.confidence !== "none"
+                        : !!cityMatch?.matchedCity && cityMatch.confidence !== "none"
+                    );
+                const hasLowConfidence = !isDhl && cityMatch?.confidence === "none" && !manualCityCode;
                 const hasRouteIssue = exitDataLoaded && detailOrder && !isRouteValid(detailOrder, validDestinations);
                 const hasIssue = !selectedCarrier || !hasCityCode || hasRouteIssue;
                 if (!hasIssue) return null;
@@ -571,7 +583,7 @@ export function OrderDetailDialog(props: OrderDetailDialogProps) {
                         City match confidence too low ({Math.round((cityMatch.score || 0) * 100)}%) — select from alternatives or enter city code manually
                       </div>
                     )}
-                    {!cityMatch?.matchedCity && !cityMatch?.smsaCity && !manualCityCode && (
+                    {!isDhl && !cityMatch?.matchedCity && !cityMatch?.smsaCity && !manualCityCode && (
                       <div>&#x2716; City code is not matched — run city match or enter manually</div>
                     )}
                   </div>
@@ -604,11 +616,12 @@ export function OrderDetailDialog(props: OrderDetailDialogProps) {
                 disabled={
                   creating ||
                   !selectedCarrier ||
-                  (!manualCityCode && !(
+                  (selectedCarrier !== "dhl" && !manualCityCode && !(
                     cityMatch?.carrier === "smsa"
                       ? cityMatch?.smsaCity && cityMatch.confidence !== "none"
                       : cityMatch?.matchedCity && cityMatch.confidence !== "none"
                   )) ||
+                  (selectedCarrier === "dhl" && !editedShipping?.city) ||
                   (exitDataLoaded && !!detailOrder && !isRouteValid(detailOrder, validDestinations))
                 }
               >

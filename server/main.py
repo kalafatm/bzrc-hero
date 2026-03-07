@@ -45,6 +45,13 @@ NAQEL_BRANCH_CODE = os.getenv("NAQEL_BRANCH_CODE", "")
 SMSA_BASE_URL = os.getenv("SMSA_BASE_URL", "https://ecomapis.smsaexpress.com")
 SMSA_API_KEY = os.getenv("SMSA_API_KEY", "")
 
+# ---------- DHL Express config ----------
+
+DHL_BASE_URL = os.getenv("DHL_BASE_URL", "https://express.api.dhl.com/mydhlapi")
+DHL_API_KEY = os.getenv("DHL_API_KEY", "")
+DHL_API_SECRET = os.getenv("DHL_API_SECRET", "")
+DHL_ACCOUNT_NUMBER = os.getenv("DHL_ACCOUNT_NUMBER", "")
+
 # ISO2 -> ISO3 country code mapping for shipper (Naqel requires ISO3 for shipper)
 COUNTRY_ISO2_TO_ISO3 = {
     "TR": "TUR", "SA": "SAU", "AE": "ARE", "GB": "GBR", "US": "USA",
@@ -55,6 +62,9 @@ COUNTRY_ISO2_TO_ISO3 = {
     "FR": "FRA", "IT": "ITA", "ES": "ESP", "NL": "NLD", "BE": "BEL",
     "CN": "CHN", "JP": "JPN", "KR": "KOR", "RU": "RUS",
 }
+
+# Map Naqel origin city codes to full city names (for DHL/SMSA builders)
+ORIGIN_CODE_TO_CITY = {"IST": "Istanbul", "ANK": "Ankara", "IZM": "Izmir"}
 
 
 # ---------- SQLAlchemy models ----------
@@ -777,6 +787,7 @@ def build_naqel_payload(shipment: Shipment, items: list, awb_number: str = "") -
             "shipperReference1": shipment.shipper_reference1 or "",
             "shipperNote1": shipment.shipper_note1 or "",
         },
+        "podType": "Nil",
     }
 
     # COD
@@ -843,7 +854,7 @@ def build_smsa_payload(shipment: Shipment, items: list) -> dict:
             "ContactName": (shipment.shipper_person_name or "Shipper")[:150],
             "ContactPhoneNumber": shipment.shipper_phone1 or "",
             "Country": shipment.shipper_country_code,
-            "City": (shipment.shipper_city or "")[:50],
+            "City": ORIGIN_CODE_TO_CITY.get(shipment.shipper_city, shipment.shipper_city or "")[:50],
             "AddressLine1": (shipment.shipper_line1 or "Address")[:100],
             "AddressLine2": (shipment.shipper_line2 or "")[:100],
             "PostalCode": shipment.shipper_post_code or "",
@@ -944,6 +955,303 @@ async def track_shipment_smsa(awb: str) -> dict:
     if resp.status_code in (200, 201):
         return resp.json()
     raise Exception(f"SMSA tracking HTTP {resp.status_code}: {resp.text[:300]}")
+
+
+# ---------- DHL Express functions ----------
+
+
+def build_dhl_payload(shipment: Shipment, items: list) -> dict:
+    """Build DHL Express MyDHL API shipment payload from our Shipment model."""
+    declared = float(shipment.customs_declared_value) if shipment.customs_declared_value else 0
+    currency = shipment.customs_value_currency or "USD"
+
+    # Planned shipping date: now + 1 hour, formatted for DHL
+    from datetime import timezone
+    ship_dt = datetime.now(timezone(timedelta(hours=3)))  # TR is UTC+3
+    planned_date = ship_dt.strftime("%Y-%m-%dT%H:%M:%S GMT+03:00")
+
+    # Weight/dimension units: US uses imperial, everyone else metric
+    consignee_cc = (shipment.consignee_country_code or "").upper()
+    is_imperial = consignee_cc == "US"
+    weight_val = float(shipment.shipment_weight_value) if shipment.shipment_weight_value else 0.5
+
+    # Build export declaration line items
+    line_items = []
+    for idx, item in enumerate(items, 1):
+        item_weight = float(item.weight_value) if item.weight_value else 0.5
+        li = {
+            "number": idx,
+            "description": (item.goods_description or "Goods")[:100],
+            "quantity": {"value": item.quantity, "unitOfMeasurement": "PCS"},
+            "price": float(item.customs_value) if item.customs_value else 0,
+            "weight": {"netValue": item_weight, "grossValue": item_weight},
+            "manufacturerCountry": item.country_of_origin or (shipment.shipper_country_code or "TR"),
+            "exportReasonType": "permanent",
+            "isTaxesPaid": True,
+        }
+        if item.commodity_code:
+            li["commodityCodes"] = [{"typeCode": "outbound", "value": item.commodity_code}]
+        line_items.append(li)
+
+    # Shipper address
+    shipper_addr = {
+        "postalCode": shipment.shipper_post_code or "34771",
+        "cityName": ORIGIN_CODE_TO_CITY.get(shipment.shipper_city, shipment.shipper_city or "Istanbul")[:45],
+        "countryCode": shipment.shipper_country_code or "TR",
+        "addressLine1": (shipment.shipper_line1 or "Istanbul")[:45],
+    }
+    if shipment.shipper_line2:
+        shipper_addr["addressLine2"] = shipment.shipper_line2[:45]
+
+    # Receiver address
+    receiver_addr = {
+        "postalCode": shipment.consignee_post_code or "00000",
+        "cityName": (shipment.consignee_city or "City")[:45],
+        "countryCode": consignee_cc,
+        "addressLine1": (shipment.consignee_line1 or "Address")[:45],
+    }
+    if shipment.consignee_line2:
+        receiver_addr["addressLine2"] = shipment.consignee_line2[:45]
+
+    # Value-added services (Paperless Trade always enabled)
+    value_added_services = [
+        {"serviceCode": "WY", "value": 0},  # Paperless Trade
+    ]
+
+    payload = {
+        "plannedShippingDateAndTime": planned_date,
+        "pickup": {"isRequested": False},
+        "productCode": "P",  # EXPRESS WORLDWIDE (Non-Doc)
+        "accounts": [{"typeCode": "shipper", "number": DHL_ACCOUNT_NUMBER}],
+        "customerDetails": {
+            "shipperDetails": {
+                "postalAddress": shipper_addr,
+                "contactInformation": {
+                    "phone": shipment.shipper_phone1 or "",
+                    "companyName": (shipment.shipper_company_name or shipment.shipper_person_name or "Bazaarica")[:80],
+                    "fullName": (shipment.shipper_person_name or "Shipper")[:80],
+                    "email": shipment.shipper_email or "",
+                },
+            },
+            "receiverDetails": {
+                "postalAddress": receiver_addr,
+                "contactInformation": {
+                    "phone": shipment.consignee_phone1 or shipment.consignee_cell_phone or "",
+                    "companyName": (shipment.consignee_company_name or shipment.consignee_person_name or "Customer")[:80],
+                    "fullName": (shipment.consignee_person_name or "Customer")[:80],
+                    "email": shipment.consignee_email or "noreply@bazaarica.com",
+                },
+            },
+        },
+        "content": {
+            "packages": [{
+                "weight": weight_val,
+                "dimensions": {
+                    "length": float(shipment.shipment_length) if shipment.shipment_length else 30,
+                    "width": float(shipment.shipment_width) if shipment.shipment_width else 20,
+                    "height": float(shipment.shipment_height) if shipment.shipment_height else 10,
+                },
+                "customerReferences": [{"value": str(shipment.woo_order_number or shipment.woo_order_id or ""), "typeCode": "CU"}],
+                "description": (shipment.description_of_goods or "Goods")[:70],
+            }],
+            "isCustomsDeclarable": True,
+            "declaredValue": declared,
+            "declaredValueCurrency": currency,
+            "unitOfMeasurement": "imperial" if is_imperial else "metric",
+            "incoterm": "DAP",
+            "description": (shipment.description_of_goods or "Goods")[:70],
+            "exportDeclaration": {
+                "lineItems": line_items,
+                "invoice": {
+                    "number": f"INV-{shipment.woo_order_number or shipment.id}",
+                    "date": datetime.utcnow().strftime("%Y-%m-%d"),
+                },
+                "exportReason": "Sale",
+            },
+        },
+        "valueAddedServices": value_added_services,
+        "outputImageProperties": {
+            "printerDPI": 300,
+            "encodingFormat": "pdf",
+            "imageOptions": [{"typeCode": "label", "templateName": "ECOM26_84_001"}],
+        },
+    }
+
+    return payload
+
+
+async def submit_shipment_dhl(shipment: Shipment, items: list, db: Session):
+    """Submit shipment to DHL Express MyDHL API."""
+    dhl_payload = build_dhl_payload(shipment, items)
+
+    auth_str = f"{DHL_API_KEY}:{DHL_API_SECRET}"
+    auth_b64 = base64.b64encode(auth_str.encode()).decode()
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{DHL_BASE_URL}/shipments",
+                json=dhl_payload,
+                headers={
+                    "Authorization": f"Basic {auth_b64}",
+                    "Content-Type": "application/json",
+                },
+            )
+
+        carrier_response = None
+        try:
+            carrier_response = resp.json()
+        except Exception:
+            carrier_response = {"raw": resp.text[:2000]}
+
+        shipment.carrier_request_payload = dhl_payload
+        shipment.carrier_response_payload = carrier_response
+
+        if resp.status_code in (200, 201) and isinstance(carrier_response, dict):
+            awb = carrier_response.get("shipmentTrackingNumber", "")
+
+            # Extract label from documents array
+            label_b64 = ""
+            documents = carrier_response.get("documents", [])
+            for doc in documents:
+                if isinstance(doc, dict) and doc.get("typeCode") == "label":
+                    label_b64 = doc.get("content", "")
+                    break
+            # Fallback: check packages for individual labels
+            if not label_b64:
+                packages = carrier_response.get("packages", [])
+                if packages and isinstance(packages[0], dict):
+                    pkg_docs = packages[0].get("documents", [])
+                    for doc in pkg_docs:
+                        if isinstance(doc, dict):
+                            label_b64 = doc.get("content", "")
+                            if label_b64:
+                                break
+
+            if awb:
+                shipment.airwaybill_number = awb
+                shipment.tracking_number = awb
+                shipment.status = "submitted"
+                shipment.status_message = "Submitted to DHL Express successfully"
+                shipment.last_status_change_at = datetime.utcnow()
+
+                if label_b64:
+                    shipment.label_base64 = label_b64
+
+                logger.info(f"Shipment {shipment.id} DHL submitted: AWB={awb}")
+            else:
+                shipment.status = "submit_failed"
+                shipment.status_message = f"DHL returned no AWB: {str(carrier_response)[:500]}"
+                shipment.last_status_change_at = datetime.utcnow()
+        else:
+            error_detail = str(carrier_response)[:500] if carrier_response else resp.text[:500]
+            shipment.status = "submit_failed"
+            shipment.status_message = f"DHL HTTP {resp.status_code}: {error_detail}"
+            shipment.last_status_change_at = datetime.utcnow()
+            logger.error(f"Shipment {shipment.id} DHL submit failed: HTTP {resp.status_code}")
+
+    except httpx.TimeoutException:
+        shipment.status = "submit_failed"
+        shipment.status_message = "DHL API request timed out"
+        shipment.last_status_change_at = datetime.utcnow()
+    except Exception as e:
+        shipment.status = "submit_failed"
+        shipment.status_message = f"DHL error: {str(e)[:500]}"
+        shipment.last_status_change_at = datetime.utcnow()
+
+
+# DHL event code -> internal status mapping
+DHL_STATUS_MAP = {
+    "OK": "delivered",
+    "PU": "in_transit",
+    "SA": "in_transit",
+    "AF": "in_transit",
+    "DF": "in_transit",
+    "PL": "in_transit",
+    "IC": "in_transit",
+    "CR": "in_transit",
+    "WC": "in_transit",
+    "OH": "in_transit",
+    "CC": "in_transit",
+    "FD": "in_transit",
+    "SD": "in_transit",
+    "ND": "failed",
+    "RD": "failed",
+    "RT": "failed",
+    "BA": "failed",
+    "HP": "in_transit",
+    "DD": "delivered",
+}
+
+
+async def track_shipment_dhl(awb: str) -> dict:
+    """Query DHL Express tracking by AWB number."""
+    auth_str = f"{DHL_API_KEY}:{DHL_API_SECRET}"
+    auth_b64 = base64.b64encode(auth_str.encode()).decode()
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(
+            f"{DHL_BASE_URL}/tracking",
+            params={"shipmentTrackingNumber": awb},
+            headers={"Authorization": f"Basic {auth_b64}"},
+        )
+    if resp.status_code in (200, 201):
+        return resp.json()
+    raise Exception(f"DHL tracking HTTP {resp.status_code}: {resp.text[:300]}")
+
+
+def parse_dhl_tracking(raw: dict) -> tuple:
+    """Parse DHL tracking response into (new_status, status_message, events_list)."""
+    events = []
+    new_status = None
+    status_msg = None
+
+    shipments = raw.get("shipments", [])
+    if not shipments:
+        return (None, None, [])
+
+    shipment_data = shipments[0]
+
+    dhl_events = shipment_data.get("events", [])
+    for evt in dhl_events:
+        if not isinstance(evt, dict):
+            continue
+
+        # Location from serviceArea or location.address
+        location = None
+        svc_area = evt.get("serviceArea", {})
+        if isinstance(svc_area, dict):
+            location = svc_area.get("description")
+        if not location:
+            loc = evt.get("location", {})
+            if isinstance(loc, dict):
+                addr = loc.get("address", {})
+                if isinstance(addr, dict):
+                    location = addr.get("addressLocality")
+
+        events.append({
+            "event_code": evt.get("typeCode") or evt.get("statusCode") or "",
+            "event_description": evt.get("description") or evt.get("status") or "",
+            "event_date": evt.get("timestamp") or evt.get("date") or "",
+            "event_location": location or "",
+            "event_detail": evt.get("remark") or "",
+        })
+
+    # Derive internal status from latest event
+    if events:
+        latest_code = events[0].get("event_code", "")
+        new_status = DHL_STATUS_MAP.get(latest_code)
+        if not new_status:
+            latest_desc = (events[0].get("event_description") or "").lower()
+            if "delivered" in latest_desc:
+                new_status = "delivered"
+            elif "returned" in latest_desc:
+                new_status = "failed"
+            else:
+                new_status = "in_transit"
+        status_msg = events[0].get("event_description")
+
+    return (new_status, status_msg, events)
 
 
 # ---------- Pydantic schemas ----------
@@ -1404,97 +1712,73 @@ async def submit_shipment_endpoint(shipment_id: int, db: Session = Depends(get_d
     if carrier == "smsa":
         # ---------- SMSA submit ----------
         await submit_shipment_smsa(shipment, items, db)
+    elif carrier == "dhl":
+        # ---------- DHL Express submit ----------
+        await submit_shipment_dhl(shipment, items, db)
     elif carrier in ("naqel", "gn_connect"):
-        # ---------- Naqel / GN Connect submit ----------
+        # ---------- Naqel / GN Connect submit (AWB auto-generated by Naqel) ----------
         token = await get_naqel_token()
         url = f"{NAQEL_BASE_URL}/api/gnconnect/Shipments"
-        max_retries = 10
-        last_error = None
+        naqel_payload = build_naqel_payload(shipment, items, awb_number="")
 
-        for attempt in range(max_retries):
-            awb_number = get_next_awb(db)
-            naqel_payload = build_naqel_payload(shipment, items, awb_number=awb_number)
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    url,
+                    json=naqel_payload,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                )
 
+            carrier_response = None
             try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    resp = await client.post(
-                        url,
-                        json=naqel_payload,
-                        headers={
-                            "Authorization": f"Bearer {token}",
-                            "Content-Type": "application/json",
-                        },
-                    )
+                carrier_response = resp.json()
+            except Exception:
+                carrier_response = {"raw": resp.text[:2000]}
 
-                carrier_response = None
-                try:
-                    carrier_response = resp.json()
-                except Exception:
-                    carrier_response = {"raw": resp.text[:2000]}
+            shipment.carrier_request_payload = naqel_payload
+            shipment.carrier_response_payload = carrier_response
 
-                shipment.carrier_request_payload = naqel_payload
-                shipment.carrier_response_payload = carrier_response
+            if resp.status_code in (200, 201) and isinstance(carrier_response, dict):
+                naqel_status = carrier_response.get("status", "")
 
-                if isinstance(carrier_response, dict):
-                    errors = carrier_response.get("errors") or []
-                    msg = carrier_response.get("message") or ""
-                    is_awb_exists = (
-                        (isinstance(errors, list) and any("already exists" in str(e).lower() for e in errors)) or
-                        "already exists" in msg.lower()
-                    )
-                    if is_awb_exists:
-                        logger.info(f"Shipment {shipment_id} AWB {awb_number} already exists, retrying ({attempt+1}/{max_retries})")
-                        last_error = f"AWB {awb_number} already exists"
-                        continue
+                if naqel_status == "Success":
+                    resp_awb = carrier_response.get("airwaybill", "")
+                    label_b64 = carrier_response.get("shipmentLabel", "")
 
-                if resp.status_code in (200, 201) and isinstance(carrier_response, dict):
-                    naqel_status = carrier_response.get("status", "")
-
-                    if naqel_status == "Success":
-                        resp_awb = carrier_response.get("airwaybill", "") or awb_number
-                        label_b64 = carrier_response.get("shipmentLabel", "")
-
-                        shipment.airwaybill_number = resp_awb
-                        shipment.tracking_number = resp_awb
-                        shipment.status = "submitted"
-                        shipment.status_message = "Submitted to Naqel successfully"
-                        shipment.last_status_change_at = datetime.utcnow()
-
-                        if label_b64:
-                            shipment.label_base64 = label_b64
-
-                        logger.info(f"Shipment {shipment_id} submitted: AWB={resp_awb} (attempt {attempt+1})")
-                        break
-                    else:
-                        error_msg = carrier_response.get("message") or carrier_response.get("detail") or str(carrier_response)
-                        shipment.status = "submit_failed"
-                        shipment.status_message = f"Naqel error: {error_msg[:500]}"
-                        shipment.last_status_change_at = datetime.utcnow()
-                        logger.warning(f"Shipment {shipment_id} Naqel error: {error_msg}")
-                        break
-                else:
-                    error_detail = str(carrier_response)[:500] if carrier_response else resp.text[:500]
-                    shipment.status = "submit_failed"
-                    shipment.status_message = f"Naqel HTTP {resp.status_code}: {error_detail}"
+                    shipment.airwaybill_number = resp_awb
+                    shipment.tracking_number = resp_awb
+                    shipment.status = "submitted"
+                    shipment.status_message = "Submitted to Naqel successfully"
                     shipment.last_status_change_at = datetime.utcnow()
-                    logger.error(f"Shipment {shipment_id} submit failed: HTTP {resp.status_code}")
-                    break
 
-            except httpx.TimeoutException:
+                    if label_b64:
+                        shipment.label_base64 = label_b64
+
+                    logger.info(f"Shipment {shipment_id} submitted: AWB={resp_awb}")
+                else:
+                    error_msg = carrier_response.get("message") or carrier_response.get("detail") or str(carrier_response)
+                    shipment.status = "submit_failed"
+                    shipment.status_message = f"Naqel error: {error_msg[:500]}"
+                    shipment.last_status_change_at = datetime.utcnow()
+                    logger.warning(f"Shipment {shipment_id} Naqel error: {error_msg}")
+            else:
+                error_detail = str(carrier_response)[:500] if carrier_response else resp.text[:500]
                 shipment.status = "submit_failed"
-                shipment.status_message = "Naqel API request timed out"
+                shipment.status_message = f"Naqel HTTP {resp.status_code}: {error_detail}"
                 shipment.last_status_change_at = datetime.utcnow()
-                break
-            except Exception as e:
-                shipment.status = "submit_failed"
-                shipment.status_message = f"Error: {str(e)[:500]}"
-                shipment.last_status_change_at = datetime.utcnow()
-                break
-        else:
+                logger.error(f"Shipment {shipment_id} submit failed: HTTP {resp.status_code}")
+
+        except httpx.TimeoutException:
             shipment.status = "submit_failed"
-            shipment.status_message = f"AWB allocation failed after {max_retries} attempts: {last_error}"
+            shipment.status_message = "Naqel API request timed out"
             shipment.last_status_change_at = datetime.utcnow()
-            logger.error(f"Shipment {shipment_id}: AWB exhausted after {max_retries} retries")
+        except Exception as e:
+            shipment.status = "submit_failed"
+            shipment.status_message = f"Error: {str(e)[:500]}"
+            shipment.last_status_change_at = datetime.utcnow()
     else:
         raise HTTPException(status_code=400, detail=f"Unknown carrier: {carrier}")
 
@@ -1528,6 +1812,9 @@ async def get_label_endpoint(shipment_id: int, db: Session = Depends(get_db)):
 
     if carrier == "smsa":
         # SMSA: label was stored during submit (no separate endpoint)
+        label_b64 = shipment.label_base64
+    elif carrier == "dhl":
+        # DHL: label was stored during submit (returned in create response)
         label_b64 = shipment.label_base64
     else:
         # Naqel: try dedicated LabelPrint endpoint for proper layout
@@ -1603,6 +1890,7 @@ async def bulk_track_endpoint(db: Session = Depends(get_db)):
     # Get Naqel token only if there are Naqel shipments
     naqel_shipments = [s for s in trackable if (s.carrier_code or "naqel").lower() in ("naqel", "gn_connect")]
     smsa_shipments = [s for s in trackable if (s.carrier_code or "").lower() == "smsa"]
+    dhl_shipments = [s for s in trackable if (s.carrier_code or "").lower() == "dhl"]
     token = await get_naqel_token() if naqel_shipments else None
 
     updated = 0
@@ -1664,6 +1952,35 @@ async def bulk_track_endpoint(db: Session = Depends(get_db)):
             })
             logger.warning(f"SMSA track {shipment.airwaybill_number} failed: {e}")
 
+    # Track DHL shipments
+    for shipment in dhl_shipments:
+        try:
+            raw = await track_shipment_dhl(shipment.airwaybill_number)
+            new_status, status_msg, parsed_events = parse_dhl_tracking(raw)
+            new_count = _store_tracking_events(db, shipment.id, shipment.airwaybill_number, parsed_events)
+
+            if new_status and new_status != shipment.status:
+                shipment.status = new_status
+                shipment.status_message = status_msg
+                shipment.last_status_change_at = datetime.utcnow()
+                updated += 1
+
+            shipment.last_tracked_at = datetime.utcnow()
+            details.append({
+                "shipment_id": shipment.id,
+                "awb": shipment.airwaybill_number,
+                "new_events": new_count,
+                "status": shipment.status,
+            })
+        except Exception as e:
+            errors += 1
+            details.append({
+                "shipment_id": shipment.id,
+                "awb": shipment.airwaybill_number,
+                "error": str(e)[:200],
+            })
+            logger.warning(f"DHL track {shipment.airwaybill_number} failed: {e}")
+
     db.commit()
     return BulkTrackingResult(total_tracked=len(trackable), updated=updated, errors=errors, details=details)
 
@@ -1705,6 +2022,16 @@ async def track_shipment_endpoint(shipment_id: int, db: Session = Depends(get_db
         except Exception as e:
             shipment.status_message = f"SMSA tracking error: {str(e)[:200]}"
             logger.warning(f"SMSA track {shipment.airwaybill_number}: {e}")
+    elif carrier == "dhl":
+        # DHL: full event timeline via tracking API
+        raw = await track_shipment_dhl(shipment.airwaybill_number)
+        new_status, status_msg, parsed_events = parse_dhl_tracking(raw)
+        _store_tracking_events(db, shipment.id, shipment.airwaybill_number, parsed_events)
+
+        if new_status and new_status != shipment.status:
+            shipment.status = new_status
+            shipment.status_message = status_msg
+            shipment.last_status_change_at = datetime.utcnow()
     else:
         # Naqel / GN Connect
         token = await get_naqel_token()
@@ -1783,6 +2110,7 @@ async def tracking_poller():
 
                 naqel_list = [s for s in trackable if (s.carrier_code or "naqel").lower() in ("naqel", "gn_connect")]
                 smsa_list = [s for s in trackable if (s.carrier_code or "").lower() == "smsa"]
+                dhl_list = [s for s in trackable if (s.carrier_code or "").lower() == "dhl"]
                 token = await get_naqel_token() if naqel_list else None
                 updated_count = 0
 
@@ -1813,6 +2141,22 @@ async def tracking_poller():
                         shipment.last_tracked_at = datetime.utcnow()
                     except Exception as e:
                         logger.warning(f"Auto-track SMSA {shipment.airwaybill_number}: {e}")
+
+                for shipment in dhl_list:
+                    try:
+                        raw = await track_shipment_dhl(shipment.airwaybill_number)
+                        new_status, status_msg, parsed_events = parse_dhl_tracking(raw)
+                        _store_tracking_events(db, shipment.id, shipment.airwaybill_number, parsed_events)
+
+                        if new_status and new_status != shipment.status:
+                            shipment.status = new_status
+                            shipment.status_message = status_msg
+                            shipment.last_status_change_at = datetime.utcnow()
+                            updated_count += 1
+
+                        shipment.last_tracked_at = datetime.utcnow()
+                    except Exception as e:
+                        logger.warning(f"Auto-track DHL {shipment.airwaybill_number}: {e}")
 
                 db.commit()
                 logger.info(f"Auto-tracking poll done: {len(trackable)} checked, {updated_count} updated")

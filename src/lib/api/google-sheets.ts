@@ -269,6 +269,24 @@ export async function getExitLocation(
 }
 
 /**
+ * Look up exit location by exit location CODE (e.g. "RUH", "IST", "DXB").
+ * Used when bzrc_Naqel_Exit_Location meta provides the location code directly.
+ */
+export async function getExitLocationByCode(
+  locationCode: string,
+  destinationCountry: string
+): Promise<ExitLocationRow | null> {
+  const data = await getSheetData();
+  return (
+    data.exitLocations.find(
+      (r) =>
+        r.exitLocationCode.toUpperCase() === locationCode.toUpperCase() &&
+        r.destinationCountry.toUpperCase() === destinationCountry.toUpperCase()
+    ) || null
+  );
+}
+
+/**
  * Get the destination currency for a country from naqelCityCodes.
  */
 export async function getCountryCurrency(countryCode: string): Promise<string | null> {

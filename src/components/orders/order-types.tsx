@@ -81,7 +81,7 @@ export interface BulkResults {
 export const CARRIERS = [
   { value: "naqel", label: "Naqel" },
   { value: "smsa", label: "SMSA" },
-  { value: "dhl", label: "DHL (coming soon)", disabled: true },
+  { value: "dhl", label: "DHL Express" },
 ] as { value: string; label: string; disabled?: boolean }[];
 
 export const WC_STATUS_COLORS: Record<string, string> = {

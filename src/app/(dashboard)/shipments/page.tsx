@@ -12,6 +12,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -42,6 +47,7 @@ interface ShipmentData {
   id: number;
   woo_order_id: number | null;
   woo_order_number: string | null;
+  carrier_code: string | null;
   customer_code: string;
   branch_code: string;
   product_type: string;
@@ -139,7 +145,9 @@ const STATUS_COLORS: Record<string, string> = {
 export default function ShipmentsPage() {
   const [shipments, setShipments] = useState<ShipmentData[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterStatuses, setFilterStatuses] = useState<Set<string>>(new Set());
+  const [filterCarrier, setFilterCarrier] = useState("all");
+  const [filterCountry, setFilterCountry] = useState("all");
   const [page, setPage] = useState(0);
 
   // Selection for bulk submit
@@ -170,7 +178,6 @@ export default function ShipmentsPage() {
         limit: "50",
         offset: String(page * 50),
       });
-      if (filterStatus !== "all") params.set("status", filterStatus);
 
       const res = await fetch(`/api/shipments?${params}`);
       const json = await res.json();
@@ -186,7 +193,7 @@ export default function ShipmentsPage() {
       );
     }
     setLoading(false);
-  }, [filterStatus, page]);
+  }, [page]);
 
   useEffect(() => {
     fetchShipments();
@@ -484,13 +491,36 @@ export default function ShipmentsPage() {
   const isSubmittable = (s: ShipmentData) =>
     s.status === "created" || s.status === "draft" || s.status === "pending" || s.status === "submit_failed";
 
+  // Client-side filters (all filters are client-side)
+  const filteredShipments = shipments.filter((s) => {
+    if (filterStatuses.size > 0 && !filterStatuses.has(s.status)) return false;
+    if (filterCarrier !== "all" && (s.carrier_code || "").toLowerCase() !== filterCarrier) return false;
+    if (filterCountry !== "all" && s.consignee.country_code !== filterCountry) return false;
+    return true;
+  });
+
+  const toggleStatus = (status: string) => {
+    setFilterStatuses((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      return next;
+    });
+  };
+
+  const ALL_STATUSES = ["created", "pending", "submitted", "submit_failed", "in_transit", "delivered", "failed", "cancelled"];
+
+  // Unique values for filter dropdowns
+  const uniqueCarriers = [...new Set(shipments.map((s) => (s.carrier_code || "").toLowerCase()).filter(Boolean))].sort();
+  const uniqueCountries = [...new Set(shipments.map((s) => s.consignee.country_code).filter(Boolean))].sort();
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Shipments</h1>
           <p className="text-muted-foreground">
-            Naqel shipments via remote API
+            Shipments via remote API
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -499,7 +529,7 @@ export default function ShipmentsPage() {
               <Send className="size-4" />
               {submitting.size > 0
                 ? "Submitting..."
-                : `Submit to Naqel (${selected.size})`}
+                : `Submit (${selected.size})`}
             </Button>
           )}
           <Button
@@ -525,35 +555,12 @@ export default function ShipmentsPage() {
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="flex items-center gap-3">
-        <Select
-          value={filterStatus}
-          onValueChange={(v) => {
-            setFilterStatus(v);
-            setPage(0);
-          }}
-        >
-          <SelectTrigger className="w-[170px]">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Statuses</SelectItem>
-            <SelectItem value="created">Created</SelectItem>
-            <SelectItem value="pending">Pending</SelectItem>
-            <SelectItem value="submitted">Submitted</SelectItem>
-            <SelectItem value="submit_failed">Submit Failed</SelectItem>
-            <SelectItem value="in_transit">In Transit</SelectItem>
-            <SelectItem value="delivered">Delivered</SelectItem>
-            <SelectItem value="failed">Failed</SelectItem>
-          </SelectContent>
-        </Select>
-        {selected.size > 0 && (
-          <Badge className="bg-primary text-primary-foreground">
-            {selected.size} selected
-          </Badge>
-        )}
-      </div>
+      {/* Selection badge */}
+      {selected.size > 0 && (
+        <Badge className="bg-primary text-primary-foreground">
+          {selected.size} selected
+        </Badge>
+      )}
 
       {/* Content */}
       {loading ? (
@@ -581,7 +588,7 @@ export default function ShipmentsPage() {
                       checked={
                         selected.size > 0 &&
                         selected.size ===
-                          shipments.filter(isSubmittable).length
+                          filteredShipments.filter(isSubmittable).length
                       }
                       onCheckedChange={toggleSelectAll}
                     />
@@ -590,8 +597,69 @@ export default function ShipmentsPage() {
                   <th className="p-3 text-left font-medium">Order #</th>
                   <th className="p-3 text-left font-medium">AWB</th>
                   <th className="p-3 text-left font-medium">Consignee</th>
-                  <th className="p-3 text-left font-medium">Destination</th>
-                  <th className="p-3 text-center font-medium">Status</th>
+                  <th className="p-3 text-left font-medium">
+                    <Select value={filterCountry} onValueChange={(v) => setFilterCountry(v)}>
+                      <SelectTrigger className="h-7 w-[90px] text-xs font-medium border-0 bg-transparent p-0">
+                        <SelectValue placeholder="Dest" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Dest</SelectItem>
+                        {uniqueCountries.map((c) => (
+                          <SelectItem key={c} value={c}>{c}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </th>
+                  <th className="p-3 text-left font-medium">
+                    <Select value={filterCarrier} onValueChange={(v) => setFilterCarrier(v)}>
+                      <SelectTrigger className="h-7 w-[90px] text-xs font-medium border-0 bg-transparent p-0">
+                        <SelectValue placeholder="Carrier" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        {uniqueCarriers.map((c) => (
+                          <SelectItem key={c} value={c}>{c.toUpperCase()}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </th>
+                  <th className="p-3 text-center font-medium">
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button className="inline-flex items-center gap-1 text-xs font-medium hover:text-foreground text-muted-foreground">
+                          {filterStatuses.size === 0
+                            ? "All Status"
+                            : filterStatuses.size === 1
+                              ? [...filterStatuses][0]
+                              : `${filterStatuses.size} statuses`}
+                          <ChevronRight className="size-3 rotate-90" />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[180px] p-2" align="start">
+                        <div className="space-y-1">
+                          <button
+                            className="flex w-full items-center gap-2 rounded px-2 py-1 text-xs hover:bg-muted"
+                            onClick={() => setFilterStatuses(new Set())}
+                          >
+                            <Checkbox checked={filterStatuses.size === 0} />
+                            All Status
+                          </button>
+                          {ALL_STATUSES.map((st) => (
+                            <button
+                              key={st}
+                              className="flex w-full items-center gap-2 rounded px-2 py-1 text-xs hover:bg-muted"
+                              onClick={() => toggleStatus(st)}
+                            >
+                              <Checkbox checked={filterStatuses.has(st)} />
+                              <Badge className={`${STATUS_COLORS[st] || "bg-gray-100 text-gray-700"} text-[10px] px-1.5`}>
+                                {st}
+                              </Badge>
+                            </button>
+                          ))}
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  </th>
                   <th className="p-3 text-right font-medium">Weight</th>
                   <th className="p-3 text-right font-medium">Value</th>
                   <th className="p-3 text-left font-medium">Created</th>
@@ -599,7 +667,7 @@ export default function ShipmentsPage() {
                 </tr>
               </thead>
               <tbody>
-                {shipments.map((s) => {
+                {filteredShipments.map((s) => {
                   const statusCls =
                     STATUS_COLORS[s.status] || "bg-gray-100 text-gray-700";
                   const canSubmit = isSubmittable(s);
@@ -644,7 +712,10 @@ export default function ShipmentsPage() {
                         {s.consignee.person_name}
                       </td>
                       <td className="p-3">
-                        {s.consignee.country_code} / {s.consignee.city}
+                        {s.consignee.country_code}
+                      </td>
+                      <td className="p-3 text-xs uppercase">
+                        {s.carrier_code || "—"}
                       </td>
                       <td className="p-3 text-center">
                         <Badge
@@ -746,7 +817,7 @@ export default function ShipmentsPage() {
           {/* Pagination */}
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">
-              Showing {shipments.length} shipments (offset {page * 50})
+              Showing {filteredShipments.length} of {shipments.length} shipments (offset {page * 50})
             </span>
             <div className="flex items-center gap-2">
               <Button
@@ -932,7 +1003,7 @@ export default function ShipmentsPage() {
                       <Send className="size-4" />
                       {submitting.has(detail.id)
                         ? "Submitting..."
-                        : "Submit to Naqel"}
+                        : "Submit to Carrier"}
                     </Button>
                   </>
                 )}

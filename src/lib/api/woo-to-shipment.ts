@@ -8,7 +8,7 @@ const DEFAULT_SHIPPER = {
   phone1: "+971501776194",
   email: "mehmet.kalafat@bazaarica.com",
   country_code: "TR",
-  city: "Umraniye",
+  city: "Istanbul",
   line1: "Istanbul",
   line2: "Istanbul",
   post_code: "34771",
@@ -89,6 +89,7 @@ interface MapOptions {
   countryCurrency?: string;
   convertedTotal?: number;
   declaredValueMultiplier?: number; // carrier-specific multiplier for customs declared value (COD)
+  originCityCode?: string; // 3-letter origin city code from exitLocation sheet (e.g. "IST")
   shipper?: {
     person_name: string;
     company_name?: string;
@@ -235,7 +236,7 @@ export function mapWooOrderToShipment(
       phone1: shipper.phone1 || undefined,
       email: shipper.email || undefined,
       country_code: shipper.country_code,
-      city: shipper.city,
+      city: options?.originCityCode || shipper.city,
       line1: shipper.line1,
       line2: ("line2" in shipper ? shipper.line2 : undefined) as string | undefined,
       post_code: ("post_code" in shipper ? shipper.post_code : undefined) as string | undefined,

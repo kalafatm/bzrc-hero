@@ -50,7 +50,7 @@ export async function getOrders(
     page: String(params?.page ?? 1),
     orderby: params?.orderby ?? "date",
     order: params?.order ?? "desc",
-    lang: params?.lang ?? "en",
+    lang: params?.lang ?? "all",
   };
   if (params?.status) {
     qp.status = Array.isArray(params.status)

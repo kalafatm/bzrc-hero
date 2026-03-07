@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Select,
@@ -94,6 +95,7 @@ export default function OrdersPage() {
   const [validDestinations, setValidDestinations] = useState<Set<string>>(new Set());
   const [exitDataLoaded, setExitDataLoaded] = useState(false);
   const [routeFilter, setRouteFilter] = useState<"all" | "valid" | "invalid">("all");
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Country → currency map (from naqelCityCodes)
   const [countryCurrencyMap, setCountryCurrencyMap] = useState<Record<string, string>>({});
@@ -145,14 +147,14 @@ export default function OrdersPage() {
   // ── Fetch Orders ────────────────────────────────────────
 
   const fetchOrders = useCallback(
-    async (p: number, forceRefresh = false) => {
+    async (_p: number, forceRefresh = false) => {
       if (!forceRefresh) {
-        const cached = loadFromCache(statusFilter, p);
+        const cached = loadFromCache(statusFilter, 1);
         if (cached) {
           setOrders(cached.orders);
-          setTotalPages(cached.totalPages);
+          setTotalPages(1);
           setTotal(cached.total);
-          setPage(p);
+          setPage(1);
           setLastSynced("cached");
           checkShipmentsForOrders();
           return;
@@ -161,28 +163,44 @@ export default function OrdersPage() {
 
       setLoading(true);
       try {
-        const params = new URLSearchParams({ page: String(p), per_page: "50" });
-        if (statusFilter !== "all") params.set("status", statusFilter);
-        if (selectedStore) params.set("store", selectedStore);
+        // Fetch ALL pages for the selected status (WC max per_page=100)
+        const allOrders: WooOrder[] = [];
+        let currentPage = 1;
+        let totalPagesRemaining = 1;
 
-        const res = await fetch(`/api/woo/orders?${params}`);
-        const json = await res.json();
-        if (json.error) {
-          toast.error(json.error);
-        } else {
-          const fetchedOrders: WooOrder[] = json.orders || [];
-          setOrders(fetchedOrders);
-          setTotalPages(json.totalPages || 1);
-          setTotal(json.total || 0);
-          setPage(p);
-          setLastSynced(new Date().toLocaleTimeString());
-          saveToCache(statusFilter, p, {
-            orders: fetchedOrders,
-            totalPages: json.totalPages || 1,
-            total: json.total || 0,
-          });
-          checkShipmentsForOrders();
+        while (currentPage <= totalPagesRemaining) {
+          const params = new URLSearchParams({ page: String(currentPage), per_page: "100" });
+          if (statusFilter !== "all") params.set("status", statusFilter);
+          if (selectedStore) params.set("store", selectedStore);
+
+          const res = await fetch(`/api/woo/orders?${params}`);
+          const json = await res.json();
+          if (json.error) {
+            toast.error(json.error);
+            break;
+          }
+
+          const pageOrders: WooOrder[] = json.orders || [];
+          allOrders.push(...pageOrders);
+          totalPagesRemaining = json.totalPages || 1;
+
+          if (currentPage < totalPagesRemaining) {
+            toast.info(`Syncing page ${currentPage + 1}/${totalPagesRemaining}...`);
+          }
+          currentPage++;
         }
+
+        setOrders(allOrders);
+        setTotalPages(1);
+        setTotal(allOrders.length);
+        setPage(1);
+        setLastSynced(new Date().toLocaleTimeString());
+        saveToCache(statusFilter, 1, {
+          orders: allOrders,
+          totalPages: 1,
+          total: allOrders.length,
+        });
+        checkShipmentsForOrders();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Failed to fetch orders");
       }
@@ -572,6 +590,25 @@ export default function OrdersPage() {
   const shippingCountry = (o: WooOrder) => o.shipping.country || o.billing.country;
   const shippingCity = (o: WooOrder) => o.shipping.city || o.billing.city;
 
+  // ── Search filter ─────────────────────────────────────────
+  const displayedOrders = useMemo(() => {
+    let filtered = orders;
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      filtered = filtered.filter((o) =>
+        String(o.number).toLowerCase().includes(q) ||
+        String(o.id).toLowerCase().includes(q)
+      );
+    }
+    if (exitDataLoaded && routeFilter !== "all") {
+      filtered = filtered.filter((o) => {
+        const valid = isRouteValid(o, validDestinations);
+        return routeFilter === "valid" ? valid : !valid;
+      });
+    }
+    return filtered;
+  }, [orders, searchQuery, exitDataLoaded, routeFilter, validDestinations]);
+
   // ── Render ───────────────────────────────────────────────
   return (
     <div className="space-y-4">
@@ -625,6 +662,12 @@ export default function OrdersPage() {
 
       {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
+        <Input
+          placeholder="Search order #..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-[160px] h-9"
+        />
         <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger className="w-[200px]">
             <SelectValue placeholder="Status" />
@@ -697,13 +740,7 @@ export default function OrdersPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(exitDataLoaded && routeFilter !== "all"
-                  ? orders.filter((o) => {
-                      const valid = isRouteValid(o, validDestinations);
-                      return routeFilter === "valid" ? valid : !valid;
-                    })
-                  : orders
-                ).map((order) => {
+                {displayedOrders.map((order) => {
                   const shipmentStatus = orderShipmentMap[order.id];
                   const hasShipment = !!shipmentStatus;
                   const carrier = getCarrierFromMeta(order.meta_data);
